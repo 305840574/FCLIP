@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import sys
+import matplotlib.pyplot as plt
+import numpy as np
 
 sys.path.append("..")
 
@@ -38,6 +40,8 @@ class SegEarthSegmentation(BaseSegmentor):
                  feature_up_cfg=dict(
                      model_name='jbu_one',
                      model_path='your/model/path')):
+        #在模型的生命周期中（例如调用 predict 或 forward 方法时），
+        # MMSegmentation 会通过 data_preprocessor 自动对输入图像进行预处理（例如归一化、通道转换）
         data_preprocessor = SegDataPreProcessor(
             mean=[122.771, 116.746, 104.094],
             std=[68.501, 66.632, 70.323],
@@ -120,12 +124,12 @@ class SegEarthSegmentation(BaseSegmentor):
             self.patch_size = self.net.visual_encoder.patch_size
         else:
             self.patch_size = self.net.visual.patch_size
-
+        #加载类别名称和索引
         query_words, self.query_idx = get_cls_idx(name_path)
         self.num_queries = len(query_words)
         self.num_classes = max(self.query_idx) + 1
         self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
-
+        #使用 openai_imagenet_template 生成文本提示，提取文本特征
         query_features = []
         with torch.no_grad(): # sub_imagenet_template, openai_imagenet_template
             for qw in query_words:
@@ -151,9 +155,10 @@ class SegEarthSegmentation(BaseSegmentor):
         self.prob_thd = prob_thd
         self.slide_stride = slide_stride
         self.slide_crop = slide_crop
-
+        #初始化特征上采样器
         if feature_up:
-            self.feat_dim = self.query_features.shape[-1]
+            #借用提取的文本特征的最终维度来表示上采样之后的图像特征的维度（因为图像特征和文本特征需要对齐，所以最终的feature_dim维度是一致的）
+            self.feat_dim = self.query_features.shape[-1] 
             self.upsampler = get_upsampler(feature_up_cfg['model_name'], self.feat_dim).cuda().half()
             ckpt = torch.load(feature_up_cfg['model_path'])['state_dict']
             weights_dict = {k[10:]: v for k, v in ckpt.items()}
@@ -162,6 +167,7 @@ class SegEarthSegmentation(BaseSegmentor):
     def forward_feature(self, img, logit_size=None):
         if type(img) == list:
             img = img[0]
+        #图像特征提取
         if self.clip_type == 'BLIP':
             img = F.interpolate(img, size=(self.slide_crop, self.slide_crop), mode='bilinear', align_corners=False)
             image_features = self.net.visual_encoder(img, self.ignore_residual)
@@ -170,14 +176,21 @@ class SegEarthSegmentation(BaseSegmentor):
             image_features = self.net.visual(img)
         else:
             image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token)
-            
+        #全局偏见缓解（CLS Token 处理）    
         if self.output_cls_token:
             image_cls_token, image_features = image_features
             image_cls_token /= image_cls_token.norm(dim=-1, keepdim=True)
+            #特征级融合
+            cls_features = image_cls_token.view(1, 1, -1)  # 形状 (1, 1, feat_dim)
+            image_features = image_features + self.cls_token_lambda * cls_features  # 形状 (1, num_patches, feat_dim)
+            '''
+            #相似性计算
             cls_logits = image_cls_token @ self.query_features.T
+            '''
 
-        # featup
+        # featup上采样
         if self.feature_up:
+            #计算图像经过特征提取之后的特征图的分辨率
             feature_w, feature_h = img[0].shape[-2] // self.patch_size[0], img[0].shape[-1] // self.patch_size[1]
             image_w, image_h = img[0].shape[-2], img[0].shape[-1]
             image_features = image_features.permute(0, 2, 1).view(1, self.feat_dim, feature_w, feature_h)
@@ -186,10 +199,51 @@ class SegEarthSegmentation(BaseSegmentor):
             image_features = image_features.view(1, self.feat_dim, image_w * image_h).permute(0, 2, 1)
 
         image_features /= image_features.norm(dim=-1, keepdim=True)
+        #相似性计算
         logits = image_features @ self.query_features.T
-
+        """
         if self.output_cls_token:
-            logits = logits + cls_logits * self.cls_token_lambda
+            '''
+            #空间自适应权重(最佳cls_token_lambda=-0.6)
+            temp_logits=logits
+            probs = temp_logits.softmax(dim=2)  # 形状 (1, num_pixels, num_queries)
+            entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=2)  # 形状 (1, num_pixels)
+            entropy = (entropy - entropy.min()) / (entropy.max() - entropy.min() + 1e-10)
+            spatial_lambda = self.cls_token_lambda * entropy  # 形状 (1, num_pixels)
+            spatial_lambda = spatial_lambda.view(1, -1, 1)  # 形状 (1, num_pixels, 1)
+            logits = logits + spatial_lambda * cls_logits.view(1, 1, -1)  # 广播后匹配 logits 形状
+            '''
+            #限制全局 logits 的作用范围
+            temp_logits=logits
+            probs = temp_logits.softmax(dim=2)  # 形状 (1, num_pixels, num_queries)
+            '''
+            print('cls_token:',cls_logits.softmax(dim=1))
+            # 采样像素并输出具体数值
+            num_samples = 10  # 采样 5 个像素
+            pixel_indices = np.random.choice(probs.shape[1], num_samples, replace=False)  # 随机选择 5 个像素
+            sampled_probs = probs[0, pixel_indices, :].cpu().numpy()  # 形状 (num_samples, num_queries)
+    
+            # 类别名称
+            name_list = ['background', 'bareland','barren', 'grass', 'pavement', 'road',
+                          'tree','forest', 'water','river', 'cropland', 'building','roof','house']
+    
+            # 打印并保存概率分布
+            with open('pixel_probs.txt', 'w') as f:
+                for i, (pixel_idx, pixel_probs) in enumerate(zip(pixel_indices, sampled_probs)):
+                    # 控制台打印
+                    print(f"\nPixel {pixel_idx} Probability Distribution:")
+                    for class_name, prob in zip(name_list, pixel_probs):
+                        print(f"{class_name}: {prob:.4f}")
+                    # 保存到文件
+                    f.write(f"\nPixel {pixel_idx} Probability Distribution:\n")
+                    for class_name, prob in zip(name_list, pixel_probs):
+                        f.write(f"{class_name}: {prob:.4f}\n")
+            '''
+            max_probs, _ = probs.max(dim=2)  # 形状 (1, num_pixels)
+            mask = (max_probs < 0.0745).float().view(1, -1, 1)  # 形状 (1, num_pixels, 1)
+            logits = logits + self.cls_token_lambda * mask * cls_logits.view(1, 1, -1)   # 广播后匹配 logits 形状
+            
+            #logits = logits + cls_logits * self.cls_token_lambda
 
             # # CLIP Surgery
             # # weights to restrain influence of obvious classes on others
@@ -203,6 +257,7 @@ class SegEarthSegmentation(BaseSegmentor):
             # feats = feats - redundant_feats
             # # sum the element-wise multiplied features as cosine similarity
             # logits = feats.sum(-1)
+        """
 
         if self.feature_up:
             w, h = img[0].shape[-2], img[0].shape[-1]
@@ -217,7 +272,11 @@ class SegEarthSegmentation(BaseSegmentor):
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
 
         return logits
-
+    '''
+    滑动窗口推理(Sliding-Window Inference):
+    用于处理大尺寸图像（例如高分辨率的遥感图像），避免直接处理整张图像带来的内存或计算限制。
+    将图像分割成多个小块(crop)，逐个小块进行推理(调用 forward_feature 方法)，然后将结果拼接回原始图像尺寸。
+    '''
     def forward_slide(self, img, img_metas, stride=112, crop_size=224):
         """Inference by sliding-window with overlap.
         If h_crop > h_img or w_crop > w_img, the small patch will be used to
@@ -234,8 +293,10 @@ class SegEarthSegmentation(BaseSegmentor):
         h_crop, w_crop = crop_size
         batch_size, _, h_img, w_img = img.shape
         out_channels = self.num_queries
+        #计算窗口数量(确保覆盖整个图像)
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
+        #初始化预测张量和计数矩阵
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img))
         count_mat = img.new_zeros((batch_size, 1, h_img, w_img))
         for h_idx in range(h_grids):
@@ -251,32 +312,35 @@ class SegEarthSegmentation(BaseSegmentor):
                 # pad image when (image_size % patch_size != 0)
                 H, W = crop_img.shape[2:]
                 pad = self.compute_padsize(H, W, self.patch_size[0])
-
                 if any(pad):
                     crop_img = nn.functional.pad(crop_img, pad)
-
+                #推理当前小块
                 crop_seg_logit = self.forward_feature(crop_img)
 
                 # mask cutting for padded image
                 if any(pad):
                     l, t = pad[0], pad[2]
                     crop_seg_logit = crop_seg_logit[:, :, t:t + H, l:l + W]
-
+                #累加预测结果
                 preds += nn.functional.pad(crop_seg_logit,
                                            (int(x1), int(preds.shape[3] - x2), int(y1),
                                             int(preds.shape[2] - y2)))
 
                 count_mat[:, :, y1:y2, x1:x2] += 1
         assert (count_mat == 0).sum() == 0
-
+        #加权平均和上采样
         preds = preds / count_mat
         img_size = img_metas[0]['ori_shape'][:2]
         logits = nn.functional.interpolate(preds, size=img_size, mode='bilinear')
 
         return logits
-
+    '''
+    predict 方法是推理的入口，用于对输入图像进行语义分割预测。它支持两种推理模式（滑动窗口或直接推理），
+    并通过 postprocess_result 方法将 logits 转换为最终的分割掩码。
+    '''
     @torch.no_grad()
     def predict(self, inputs, data_samples):
+        #构造图像元信息
         if data_samples is not None:
             batch_img_metas = [
                 data_sample.metainfo for data_sample in data_samples
@@ -296,21 +360,25 @@ class SegEarthSegmentation(BaseSegmentor):
             seg_logits = self.forward_feature(inputs, batch_img_metas[0]['ori_shape'])
 
         return self.postprocess_result(seg_logits, data_samples)
-
+    '''
+    postprocess_result 方法用于将模型推理得到的 logits 转换为最终的语义分割结果（分割掩码），
+    并根据 data_samples 的情况返回不同格式的结果。
+    '''
     def postprocess_result(self, seg_logits, data_samples):
         batch_size = seg_logits.shape[0]
         for i in range(batch_size):
             seg_logits = seg_logits[i] * self.logit_scale
             seg_logits = seg_logits.softmax(0)  # n_queries * w * h
-
+            #映射查询到类别
             num_cls, num_queries = max(self.query_idx) + 1, len(self.query_idx)
             if num_cls != num_queries:
                 seg_logits = seg_logits.unsqueeze(0)
                 cls_index = nn.functional.one_hot(self.query_idx)
                 cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)
                 seg_logits = (seg_logits * cls_index).max(1)[0]
-
-            seg_pred = seg_logits.argmax(0, keepdim=True)
+            #生成分割掩码
+            seg_pred = seg_logits.argmax(0, keepdim=True)#对类别维度（第 0 维）取最大值，生成分割掩码
+            #如果最大概率低于 self.prob_thd，将该像素的类别设为背景（self.bg_idx）
             seg_pred[seg_logits.max(0, keepdim=True)[0] < self.prob_thd] = self.bg_idx
 
             if data_samples is None:
@@ -323,7 +391,10 @@ class SegEarthSegmentation(BaseSegmentor):
                         PixelData(**{'data': seg_pred})
                 })
         return data_samples
-
+    '''
+    compute_padsize 方法计算 padding 大小，
+    确保图像尺寸是 patch_size 的整数倍(ViT 模型的要求)
+    '''
     def compute_padsize(self, H: int, W: int, patch_size: int):
         l, r, t, b = 0, 0, 0, 0
         if W % patch_size:
@@ -358,12 +429,18 @@ class SegEarthSegmentation(BaseSegmentor):
         """
         """
 
-
+'''
+get_cls_idx 是一个独立函数，用于从文件中读取类别名称和对应的类别索引，
+生成类别名称列表和索引列表
+'''
 def get_cls_idx(path):
+    #打开文件，读取所有行。name_sets：每行是一个字符串，表示一个类别的名称集合
     with open(path, 'r') as f:
         name_sets = f.readlines()
     num_cls = len(name_sets)
-
+    #解析类别名称和索引
+    # 结果：class_names = ['forest', 'woods\n', 'road', 'highway\n', 'river\n']
+    #class_indices = [0, 0, 1, 1, 2]
     class_names, class_indices = [], []
     for idx in range(num_cls):
         names_i = name_sets[idx].split(',')

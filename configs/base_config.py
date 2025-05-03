@@ -9,7 +9,7 @@ model = dict(
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-    cls_token_lambda=-0.3,
+    cls_token_lambda=-4.8,
 )
 
 test_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])

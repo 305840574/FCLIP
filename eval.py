@@ -3,6 +3,8 @@ os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 import argparse
 import segearth_segmentor
 import custom_datasets
+import custom_datasets
+import custom_datasets
 
 from mmengine.config import Config
 from mmengine.runner import Runner
@@ -41,10 +43,10 @@ def trigger_visualization_hook(cfg, args):
     if 'visualization' in default_hooks:
         visualization_hook = default_hooks['visualization']
         # Turn on visualization
-        visualization_hook['draw'] = True
+        #visualization_hook['draw'] = True
         if args.show:
             visualization_hook['show'] = True
-            visualization_hook['wait_time'] = args.wait_time
+            #visualization_hook['wait_time'] = args.wait_time
         if args.show_dir:
             visualizer = cfg.visualizer
             visualizer['save_dir'] = args.show_dir
@@ -64,17 +66,21 @@ def main():
     cfg.work_dir = args.work_dir
 
     # visualization
-    # trigger_visualization_hook(cfg, args)
+    trigger_visualization_hook(cfg, args)
     runner = Runner.from_cfg(cfg)
     results = runner.test()
 
     results.update({'VIT': cfg.model.vit_type,
                     'CLIP': cfg.model.clip_type,
                     'MODEL': cfg.model.model_type,
-                    'Dataset': cfg.dataset_type})
+                    'Dataset': cfg.dataset_type,
+                    'ClsTokenLambda':cfg.model.cls_token_lambda,
+                    'ProbThd': cfg.model.prob_thd,
+                    'Scale': cfg.test_pipeline[1]['scale']
+                    })
 
     if runner.rank == 0:
-        append_experiment_result('results.xlsx', [results])
+        append_experiment_result('result/results.xlsx', [results])
 
     if runner.rank == 0:
         with open(os.path.join(cfg.work_dir, 'results.txt'), 'a') as f:
