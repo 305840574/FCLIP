@@ -13,9 +13,14 @@ def append_experiment_result(file_path, experiment_data):
         sheet['B1'] = 'VIT'
         sheet['C1'] = 'MODEL'
         sheet['D1'] = 'Dataset'
-        sheet['E1'] = 'aAcc'
-        sheet['F1'] = 'mIoU'
-        sheet['G1'] = 'mAcc'
+        sheet['E1'] = 'ClsTokenLambda'
+        sheet['F1'] = 'FeatureClsTokenLambda'
+        sheet['G1'] = 'ProbThd'
+        sheet['H1'] = 'Scale'
+        sheet['I1'] = 'function'
+        sheet['J1'] = 'aAcc'
+        sheet['K1'] = 'mIoU'
+        sheet['L1'] = 'mAcc'
 
     last_row = sheet.max_row
 
@@ -24,9 +29,14 @@ def append_experiment_result(file_path, experiment_data):
         sheet.cell(row=last_row + index, column=2, value=result['VIT'])
         sheet.cell(row=last_row + index, column=3, value=result['MODEL'])
         sheet.cell(row=last_row + index, column=4, value=result['Dataset'])
-        sheet.cell(row=last_row + index, column=5, value=result['aAcc'])
-        sheet.cell(row=last_row + index, column=6, value=result['mIoU'])
-        sheet.cell(row=last_row + index, column=7, value=result['mAcc'])
+        sheet.cell(row=last_row + index, column=5, value=result['ClsTokenLambda'])
+        sheet.cell(row=last_row + index, column=6, value=result['FeatureClsTokenLambda'])
+        sheet.cell(row=last_row + index, column=7, value=result['ProbThd'])
+        sheet.cell(row=last_row + index, column=8, value=str(result['Scale']))
+        sheet.cell(row=last_row + index, column=9, value=result['function'])
+        sheet.cell(row=last_row + index, column=10, value=result['aAcc'])
+        sheet.cell(row=last_row + index, column=11, value=result['mIoU'])
+        sheet.cell(row=last_row + index, column=12, value=result['mAcc'])
 
     workbook.save(file_path)
 

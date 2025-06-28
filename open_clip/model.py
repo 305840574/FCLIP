@@ -267,8 +267,9 @@ class CLIP(nn.Module):
                      model_type,
                      ignore_residual: bool = False,
                      output_cls_token: bool = False,
+                     isFusion:bool = True,
                      normalize: bool = False):
-        features = self.visual(image, model_type, ignore_residual, output_cls_token)
+        features = self.visual(image, model_type, ignore_residual, output_cls_token,isFusion)
         if output_cls_token:
             cls_token, features = features
             return F.normalize(cls_token, dim=-1) if normalize else cls_token, \
@@ -512,7 +513,7 @@ def build_model_from_openai_state_dict(
     for key in ["input_resolution", "context_length", "vocab_size"]:
         state_dict.pop(key, None)
     convert_weights_to_fp16(model)  # OpenAI state dicts are partially converted to float16
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict,strict=False)
     return model.eval()
 
 

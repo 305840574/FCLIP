@@ -3,13 +3,12 @@ os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 import argparse
 import segearth_segmentor
 import custom_datasets
-import custom_datasets
-import custom_datasets
 
 from mmengine.config import Config
 from mmengine.runner import Runner
 
 from utils import append_experiment_result
+from Hook import SaveTrainableModulesHook
 
 
 def parse_args():
@@ -75,8 +74,10 @@ def main():
                     'MODEL': cfg.model.model_type,
                     'Dataset': cfg.dataset_type,
                     'ClsTokenLambda':cfg.model.cls_token_lambda,
+                    'FeatureClsTokenLambda':cfg.model.feature_cls_token_lambda,
                     'ProbThd': cfg.model.prob_thd,
-                    'Scale': cfg.test_pipeline[1]['scale']
+                    'Scale': cfg.test_pipeline[1]['scale'],
+                    'function':"特征级融合+logits级融合"
                     })
 
     if runner.rank == 0:

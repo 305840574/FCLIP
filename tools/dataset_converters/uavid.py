@@ -171,7 +171,7 @@ def main():
     mkdir_or_exist(osp.join(out_dir, 'img_dir', 'test'))
     mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'test'))
 
-    test_dir = osp.join(dataset_path, 'test_gt')
+    test_dir = osp.join(dataset_path, 'uavid_val')
     src_path_list = glob.glob(os.path.join(test_dir, '**', '*.png'), recursive=True)
 
     prog_bar = ProgressBar(len(src_path_list))

@@ -3,6 +3,9 @@ import mmengine.fileio as fileio
 
 from mmseg.registry import DATASETS
 from mmseg.datasets import BaseSegDataset
+import mmcv
+import numpy as np
+
 
 
 @DATASETS.register_module()
@@ -42,8 +45,8 @@ class WHUDataset(BaseSegDataset):
         palette=[[0, 0, 0], [255, 255, 255]])
 
     def __init__(self,
-                 img_suffix='.png',
-                 seg_map_suffix='.png',
+                 img_suffix='.tif',
+                 seg_map_suffix='.tif',
                  reduce_zero_label=False,
                  **kwargs) -> None:
         super().__init__(

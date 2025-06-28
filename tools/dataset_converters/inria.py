@@ -107,8 +107,11 @@ def main():
     print('Making directories...')
     mkdir_or_exist(osp.join(out_dir, 'img_dir', 'split_test'))
     mkdir_or_exist(osp.join(out_dir, 'img_dir', 'split_val'))
+    mkdir_or_exist(osp.join(out_dir, 'img_dir', 'split_train'))
     mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'split_test'))
     mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'split_val'))
+    mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'split_train'))
+    
 
     rgb_8bit_dir = osp.join(dataset_path, 'images')
     ann_idx_dir = osp.join(dataset_path, 'gt')
@@ -123,9 +126,6 @@ def main():
             data_type = 'split_test'
         else:
             data_type = 'split_train'
-        
-        if data_type == 'split_train':
-            continue
 
         dst_dir = osp.join(out_dir, 'ann_dir', data_type)
         clip_big_image(ann_path, dst_dir, args, to_label=True)

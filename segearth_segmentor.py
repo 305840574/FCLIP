@@ -20,7 +20,6 @@ from BLIP.models.blip_retrieval import blip_retrieval
 import gem
 from simfeatup_dev.upsamplers import get_upsampler
 
-
 @MODELS.register_module()
 class SegEarthSegmentation(BaseSegmentor):
     def __init__(self,
@@ -30,28 +29,35 @@ class SegEarthSegmentation(BaseSegmentor):
                  name_path,
                  device=torch.device('cuda'),
                  ignore_residual=True,
+                 isFusion=True,
                  prob_thd=0.0,
                  logit_scale=50,
                  slide_stride=112,
                  slide_crop=224,
                  cls_token_lambda=0,
+                 feature_cls_token_lambda=0,
                  bg_idx=0,
                  feature_up=True,
                  feature_up_cfg=dict(
                      model_name='jbu_one',
-                     model_path='your/model/path')):
+                     model_path='your/model/path'),
+                 ):
         #在模型的生命周期中（例如调用 predict 或 forward 方法时），
         # MMSegmentation 会通过 data_preprocessor 自动对输入图像进行预处理（例如归一化、通道转换）
+        
         data_preprocessor = SegDataPreProcessor(
             mean=[122.771, 116.746, 104.094],
             std=[68.501, 66.632, 70.323],
-            bgr_to_rgb=True)
+            bgr_to_rgb=True,
+            size=(448, 448)
+            )
+        
         super().__init__(data_preprocessor=data_preprocessor)
         if clip_type == 'CLIP':
             if 'B' in vit_type:
-                self.net = create_model('ViT-B/16', pretrained='openai', precision='fp16')
+                self.net = create_model('ViT-B/16', pretrained='openai', precision='fp32')
             elif 'L' in vit_type:
-                self.net = create_model('ViT-L-14', pretrained='openai', precision='fp16')
+                self.net = create_model('ViT-L-14', pretrained='openai', precision='fp32')
         elif clip_type == 'RemoteCLIP':
             if 'B' in vit_type:
                 self.net = create_model('ViT-B/32', pretrained='checkpoint/RemoteCLIP-ViT-B-32.pt', precision='fp16')
@@ -88,7 +94,7 @@ class SegEarthSegmentation(BaseSegmentor):
                 self.net = blip_retrieval(pretrained='checkpoint/model_base_14M.pth', image_size=slide_crop, vit='base')
             elif 'L' in vit_type:
                 self.net = blip_retrieval(pretrained='checkpoint/model_large.pth', image_size=slide_crop, vit='large')
-            self.net = self.net.half()
+            #self.net = self.net.half()
         elif clip_type == 'ALIP':
             self.net = create_model('ViT-B/32', pretrained='checkpoint/ALIP_YFCC15M_B32.pt', precision='fp16')
 
@@ -116,14 +122,24 @@ class SegEarthSegmentation(BaseSegmentor):
         self.vit_type = vit_type
         self.model_type = model_type
         self.feature_up = feature_up
-        self.cls_token_lambda = cls_token_lambda
-        self.output_cls_token = cls_token_lambda != 0
+        self.isFusion=isFusion
+        if isFusion:
+            self.cls_token_lambda=-0.00001
+        else:
+            self.cls_token_lambda = cls_token_lambda
+        self.feature_cls_token_lambda=feature_cls_token_lambda
+        self.output_cls_token = cls_token_lambda != 0 or feature_cls_token_lambda != 0,
         self.bg_idx = bg_idx
+        self.slide_stride = slide_stride
+        self.slide_crop = slide_crop
 
         if self.clip_type == 'BLIP':
             self.patch_size = self.net.visual_encoder.patch_size
         else:
             self.patch_size = self.net.visual.patch_size
+
+        
+
         #加载类别名称和索引
         query_words, self.query_idx = get_cls_idx(name_path)
         self.num_queries = len(query_words)
@@ -143,9 +159,11 @@ class SegEarthSegmentation(BaseSegmentor):
                 else:
                     query = self.tokenizer([temp(qw) for temp in openai_imagenet_template]).to(device)
                     feature = self.net.encode_text(query)
-                    feature /= feature.norm(dim=-1, keepdim=True)
+                    feature_time1=feature
+                    feature = feature/feature_time1.norm(dim=-1, keepdim=True)
                 feature = feature.mean(dim=0)
-                feature /= feature.norm()
+                feature_time2=feature
+                feature = feature/feature_time2.norm()
                 query_features.append(feature.unsqueeze(0))
         self.query_features = torch.cat(query_features, dim=0)
 
@@ -153,20 +171,46 @@ class SegEarthSegmentation(BaseSegmentor):
         self.ignore_residual = ignore_residual
         self.logit_scale = logit_scale
         self.prob_thd = prob_thd
-        self.slide_stride = slide_stride
-        self.slide_crop = slide_crop
+        
+        if self.isFusion:
+            # 加载训练保存的 state_dict
+            state_dict = torch.load("/data/SegEarth-OV/state_dict/VDD/no_class_weight_agjust/best_mIoU_epoch_280.pth")['state_dict']
+
+            # 只提取 fusion 模块的部分，并去掉前缀 'net.visual.fusion.'
+            fusion_state_dict = {
+                k.replace('net.visual.fusion.', ''): v
+                for k, v in state_dict.items()
+                if k.startswith('net.visual.fusion.')
+            }
+            # 加载到 fusion 模块中
+            self.net.visual.fusion.load_state_dict(fusion_state_dict)
+        
         #初始化特征上采样器
         if feature_up:
             #借用提取的文本特征的最终维度来表示上采样之后的图像特征的维度（因为图像特征和文本特征需要对齐，所以最终的feature_dim维度是一致的）
             self.feat_dim = self.query_features.shape[-1] 
-            self.upsampler = get_upsampler(feature_up_cfg['model_name'], self.feat_dim).cuda().half()
+            #self.upsampler = get_upsampler(feature_up_cfg['model_name'], self.feat_dim).cuda().half()
+            self.upsampler = get_upsampler(feature_up_cfg['model_name'], self.feat_dim).cuda()
             ckpt = torch.load(feature_up_cfg['model_path'])['state_dict']
             weights_dict = {k[10:]: v for k, v in ckpt.items()}
             self.upsampler.load_state_dict(weights_dict, strict=True)
-
+        
+        #只训练fusion模块
+        for name, param in self.net.named_parameters():
+            if 'fusion' not in name:
+                param.requires_grad = False
+        
+        # 冻结上采样器 SimFeatUp
+        if self.feature_up:
+            self.upsampler.eval()
+            for param in self.upsampler.parameters():
+                param.requires_grad = False
+    
     def forward_feature(self, img, logit_size=None):
         if type(img) == list:
             img = img[0]
+        img = img.cuda()
+        #print(img)
         #图像特征提取
         if self.clip_type == 'BLIP':
             img = F.interpolate(img, size=(self.slide_crop, self.slide_crop), mode='bilinear', align_corners=False)
@@ -175,18 +219,19 @@ class SegEarthSegmentation(BaseSegmentor):
         elif self.model_type == 'GEM':
             image_features = self.net.visual(img)
         else:
-            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token)
-        #全局偏见缓解（CLS Token 处理）    
+            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.isFusion)
+        #全局偏见缓解（CLS Token 处理）
         if self.output_cls_token:
             image_cls_token, image_features = image_features
-            image_cls_token /= image_cls_token.norm(dim=-1, keepdim=True)
+            image_cls_token_time=image_cls_token
+            image_cls_token = image_cls_token/image_cls_token_time.norm(dim=-1, keepdim=True)
+            
             #特征级融合
             cls_features = image_cls_token.view(1, 1, -1)  # 形状 (1, 1, feat_dim)
-            image_features = image_features + self.cls_token_lambda * cls_features  # 形状 (1, num_patches, feat_dim)
-            '''
-            #相似性计算
+            image_features = image_features + self.feature_cls_token_lambda*cls_features  # 形状 (1, num_patches, feat_dim)
+            
+            #logits融合
             cls_logits = image_cls_token @ self.query_features.T
-            '''
 
         # featup上采样
         if self.feature_up:
@@ -194,56 +239,16 @@ class SegEarthSegmentation(BaseSegmentor):
             feature_w, feature_h = img[0].shape[-2] // self.patch_size[0], img[0].shape[-1] // self.patch_size[1]
             image_w, image_h = img[0].shape[-2], img[0].shape[-1]
             image_features = image_features.permute(0, 2, 1).view(1, self.feat_dim, feature_w, feature_h)
-            with torch.cuda.amp.autocast():
-                image_features = self.upsampler(image_features, img).half()
+            #with torch.cuda.amp.autocast():
+            #    image_features = self.upsampler(image_features, img).half()
+            image_features = self.upsampler(image_features, img)
             image_features = image_features.view(1, self.feat_dim, image_w * image_h).permute(0, 2, 1)
-
-        image_features /= image_features.norm(dim=-1, keepdim=True)
+        image_features_time=image_features
+        image_features = image_features/image_features_time.norm(dim=-1, keepdim=True)
         #相似性计算
         logits = image_features @ self.query_features.T
-        """
         if self.output_cls_token:
-            '''
-            #空间自适应权重(最佳cls_token_lambda=-0.6)
-            temp_logits=logits
-            probs = temp_logits.softmax(dim=2)  # 形状 (1, num_pixels, num_queries)
-            entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=2)  # 形状 (1, num_pixels)
-            entropy = (entropy - entropy.min()) / (entropy.max() - entropy.min() + 1e-10)
-            spatial_lambda = self.cls_token_lambda * entropy  # 形状 (1, num_pixels)
-            spatial_lambda = spatial_lambda.view(1, -1, 1)  # 形状 (1, num_pixels, 1)
-            logits = logits + spatial_lambda * cls_logits.view(1, 1, -1)  # 广播后匹配 logits 形状
-            '''
-            #限制全局 logits 的作用范围
-            temp_logits=logits
-            probs = temp_logits.softmax(dim=2)  # 形状 (1, num_pixels, num_queries)
-            '''
-            print('cls_token:',cls_logits.softmax(dim=1))
-            # 采样像素并输出具体数值
-            num_samples = 10  # 采样 5 个像素
-            pixel_indices = np.random.choice(probs.shape[1], num_samples, replace=False)  # 随机选择 5 个像素
-            sampled_probs = probs[0, pixel_indices, :].cpu().numpy()  # 形状 (num_samples, num_queries)
-    
-            # 类别名称
-            name_list = ['background', 'bareland','barren', 'grass', 'pavement', 'road',
-                          'tree','forest', 'water','river', 'cropland', 'building','roof','house']
-    
-            # 打印并保存概率分布
-            with open('pixel_probs.txt', 'w') as f:
-                for i, (pixel_idx, pixel_probs) in enumerate(zip(pixel_indices, sampled_probs)):
-                    # 控制台打印
-                    print(f"\nPixel {pixel_idx} Probability Distribution:")
-                    for class_name, prob in zip(name_list, pixel_probs):
-                        print(f"{class_name}: {prob:.4f}")
-                    # 保存到文件
-                    f.write(f"\nPixel {pixel_idx} Probability Distribution:\n")
-                    for class_name, prob in zip(name_list, pixel_probs):
-                        f.write(f"{class_name}: {prob:.4f}\n")
-            '''
-            max_probs, _ = probs.max(dim=2)  # 形状 (1, num_pixels)
-            mask = (max_probs < 0.0745).float().view(1, -1, 1)  # 形状 (1, num_pixels, 1)
-            logits = logits + self.cls_token_lambda * mask * cls_logits.view(1, 1, -1)   # 广播后匹配 logits 形状
-            
-            #logits = logits + cls_logits * self.cls_token_lambda
+            logits = logits + cls_logits * self.cls_token_lambda
 
             # # CLIP Surgery
             # # weights to restrain influence of obvious classes on others
@@ -257,7 +262,7 @@ class SegEarthSegmentation(BaseSegmentor):
             # feats = feats - redundant_feats
             # # sum the element-wise multiplied features as cosine similarity
             # logits = feats.sum(-1)
-        """
+        
 
         if self.feature_up:
             w, h = img[0].shape[-2], img[0].shape[-1]
@@ -265,12 +270,12 @@ class SegEarthSegmentation(BaseSegmentor):
             w, h = img[0].shape[-2] // self.patch_size[0], img[0].shape[-1] // self.patch_size[1]
         out_dim = logits.shape[-1]
         logits = logits.permute(0, 2, 1).reshape(-1, out_dim, w, h)
-
+        #print(logits)
         if logit_size == None:
             logits = nn.functional.interpolate(logits, size=img.shape[-2:], mode='bilinear')
         else:
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
-
+        #print(logits)
         return logits
     '''
     滑动窗口推理(Sliding-Window Inference):
@@ -353,7 +358,7 @@ class SegEarthSegmentation(BaseSegmentor):
                                       pad_shape=inputs.shape[2:],
                                       padding_size=[0, 0, 0, 0])
                               ] * inputs.shape[0]
-        inputs = inputs.half()
+        #inputs = inputs.half()
         if self.slide_crop > 0:
             seg_logits = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop)
         else:
@@ -426,8 +431,24 @@ class SegEarthSegmentation(BaseSegmentor):
         """
 
     def loss(self, inputs, data_samples):
-        """
-        """
+        #inputs = inputs.half()
+       
+        # 前向传播
+        seg_logits = self.forward_feature(inputs)
+
+        # 获取 ground truth
+        seg_labels = torch.stack([ds.gt_sem_seg.data for ds in data_samples]).to(device=inputs.device, dtype=torch.long).squeeze(1)
+
+        # 固定类权重（根据类别不平衡程度设置）
+        #class_weights = torch.tensor([1.0, 1.0, 1.0, 20.0, 4.0], device=inputs.device)
+        # 计算损失
+        loss_ce = F.cross_entropy(seg_logits, seg_labels,ignore_index=255)
+        
+        losses = {'loss_ce': loss_ce}
+        # 汇总损失
+        losses['loss'] = sum(losses.values())
+        return losses
+    
 
 '''
 get_cls_idx 是一个独立函数，用于从文件中读取类别名称和对应的类别索引，

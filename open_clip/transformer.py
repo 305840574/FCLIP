@@ -323,6 +323,30 @@ class Transformer(nn.Module):
             else:
                 x = r(x, attn_mask=attn_mask)
         return x
+class MultiScaleFusion(nn.Module):
+    def __init__(self, feature_dim):
+        super().__init__()
+        self.feat_dim = feature_dim
+        # 为每个中间层特征定义投影层
+        self.proj_intermediate = nn.ModuleList([nn.Linear(feature_dim, feature_dim) for _ in range(3)])  # 提取 3 层中间层投影
+        # 融合最后一层
+        self.proj_last = nn.Linear(feature_dim, feature_dim)  # 中间层经过投影后的最后一层特征投影
+        self.fusion_last = nn.Linear(feature_dim * 2, feature_dim)  # NACLIP 和 SegEarth 进行融合
+        self.fusion_layer = nn.Linear(feature_dim, feature_dim)  # NACLIP 和 SegEarth融合后的线性变换
+    def forward(self, intermediate_feats, naclip_feat, feat):
+        # 处理中间层特征
+        intermediate_fused = 0
+        for feat, proj in zip(intermediate_feats, self.proj_intermediate):
+            feat = proj(feat)  # 投影
+            intermediate_fused += feat
+        intermediate_fused=self.proj_last(intermediate_fused)
+        # 融合最后一层
+        last_combined = torch.cat([naclip_feat, feat], dim=-1)
+        last_fused = self.fusion_last(last_combined)
+        # 融合中间层和最后一层
+        fused = intermediate_fused + last_fused
+        fused = self.fusion_layer(fused)
+        return fused
 
 
 class VisionTransformer(nn.Module):
@@ -431,6 +455,8 @@ class VisionTransformer(nn.Module):
         self.proj = nn.Parameter(scale * torch.randn(pool_dim, output_dim))
 
         self.init_parameters()
+        #融合模块
+        self.fusion=MultiScaleFusion(feature_dim=768)
 
     def lock(self, unlocked_groups=0, freeze_bn_stats=False):
         for param in self.parameters():
@@ -499,7 +525,7 @@ class VisionTransformer(nn.Module):
 
         return pooled, tokens
 
-    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, last_n_layers=1):
+    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, isFusion=True,last_n_layers=1):
         B, nc, w, h = x.shape
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
@@ -517,23 +543,36 @@ class VisionTransformer(nn.Module):
         x = self.patch_dropout(x)
         x = self.ln_pre(x)
 
-        x = x.permute(1, 0, 2)  # NLD -> LND
-
-        for blk in self.transformer.resblocks[:-last_n_layers]:
+        x = x.permute(1, 0, 2)  # NLD -> LND (N:batch_size,L:token 数,D:feature_dim特征维度)
+        # 提取中间层特征
+        intermediate_feats = []
+        for i, blk in enumerate(self.transformer.resblocks[:-last_n_layers]):
             x = blk(x)
+            if i in [2, 5, 8] and isFusion:
+               intermediate_feats.append(x)
 
         output = 0
-        for blk in self.transformer.resblocks[-last_n_layers:]:
-            if ignore_residual:
+        naclip_output=0
+        naclip_x=x
+        blk=self.transformer.resblocks[-last_n_layers]
+        if ignore_residual:
                 output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-
-                x = blk(x)
-            else:
-                x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-                x_out = x_out + blk.mlp(blk.ln_2(x_out))
-                output += x_out
-
-                x = blk(x)
+                naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
+                #x = blk(x)
+                '''
+                if model_type != "NACLIP":
+                    x = blk(x)
+                else:
+                    x = blk.ln_1(blk.ls_1(x))
+                '''
+        else:
+            x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
+            x_out = x_out + blk.mlp(blk.ln_2(x_out))
+            output += x_out
+            x = blk(x)
+        if isFusion:
+            output=self.fusion(intermediate_feats,naclip_output,output)
+            
 
         x = output.permute(1, 0, 2)  # LND -> NLD
 
@@ -647,19 +686,28 @@ class VisionTransformer(nn.Module):
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1)
         elif model_type in ['NACLIP', 'NOnly', 'GAV']:
-            self.gaussian_std = 1.0 # 5.0
+            self.gaussian_std = 5.0
             self.addition_cache = dict()
             n_patches = (int(np.sqrt((num_tokens - 1))), int(np.sqrt((num_tokens - 1))))
             addition = self.addition_cache.get(n_patches)
             if addition is None:
                 window_size = [side * 2 - 1 for side in n_patches]
+                #window_size=n_patches
                 window = VisionTransformer.gaussian_window(*window_size, std=self.gaussian_std)
                 addition = VisionTransformer.get_attention_addition(*n_patches, window).unsqueeze(0).to(x.dtype).to(x.device)
                 self.addition_cache[n_patches] = addition
             omega = addition.clone()
 
             if model_type == 'NACLIP':
-                attn_weights = torch.bmm(k, k.transpose(1, 2)) * scale
+                #attn_weights = torch.bmm(k, k.transpose(1, 2)) * scale #k-k注意力
+                
+                qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
+                kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
+                vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
+                attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
+                
+                
+                
             elif model_type == 'NOnly':
                 attn_weights = torch.zeros((num_heads, num_tokens, num_tokens)).to(x.dtype).to(x.device)
                 omega = omega * scale * torch.einsum('hop,hPO->hpP', q.norm(dim=2).unsqueeze(1), k.norm(dim=2).unsqueeze(2)).detach()
@@ -668,8 +716,14 @@ class VisionTransformer(nn.Module):
                 omega = omega * scale * torch.einsum('hop,hPO->hpP', q.norm(dim=2).unsqueeze(1), k.norm(dim=2).unsqueeze(2)).detach()
             else:
                 raise NotImplemented
-            attn_weights += omega
-            attn_weights = F.softmax(attn_weights, dim=-1)
+            
+            lambda_local=1
+            attn_weights = attn_weights + omega*lambda_local
+            
+            #attn_weights+=omega
+            #当使用Q-Q，K-K，V-V注意力+高斯核时，不需要softmax
+            if model_type != 'NACLIP':
+                attn_weights = F.softmax(attn_weights, dim=-1)
 
         attn_output = torch.bmm(attn_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
