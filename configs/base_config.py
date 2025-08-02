@@ -10,8 +10,9 @@ model = dict(
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
+        #model_path='/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/upsampler/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_20000.ckpt'),
     cls_token_lambda= -0.3,
-    feature_cls_token_lambda= 0,
+    feature_cls_token_lambda= -1.6,
 )
 
 # 评估器
@@ -49,7 +50,7 @@ default_hooks = dict(
 custom_hooks = [
     dict(
         type='SaveTrainableModulesHook',
-        interval=5,  # 每 5 轮触发
+        interval=1,  # 每 5 轮触发
         metric_key='mIoU',  # 验证指标名称
         rule='greater',     # 越大越好
     )

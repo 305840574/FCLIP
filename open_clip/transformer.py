@@ -30,7 +30,14 @@ class LayerNorm(nn.LayerNorm):
         orig_type = x.dtype
         x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         return x.to(orig_type)
+    
+class AdaptiveLayerNorm(nn.LayerNorm):
+    """Subclass torch's LayerNorm to handle fp16."""
 
+    def forward(self, x: torch.Tensor):
+        orig_type = x.dtype
+        ret = super().forward(x.type(torch.float32))
+        return ret.type(orig_type)
 
 class QuickGELU(nn.Module):
     # NOTE This is slower than nn.GELU or nn.SiLU and uses more GPU memory
@@ -333,19 +340,104 @@ class MultiScaleFusion(nn.Module):
         self.proj_last = nn.Linear(feature_dim, feature_dim)  # 中间层经过投影后的最后一层特征投影
         self.fusion_last = nn.Linear(feature_dim * 2, feature_dim)  # NACLIP 和 SegEarth 进行融合
         self.fusion_layer = nn.Linear(feature_dim, feature_dim)  # NACLIP 和 SegEarth融合后的线性变换
+        self.norm1 = AdaptiveLayerNorm(self.feat_dim)
+        self.norm2 = AdaptiveLayerNorm(self.feat_dim)
+        self.normout=AdaptiveLayerNorm(self.feat_dim)
     def forward(self, intermediate_feats, naclip_feat, feat):
         # 处理中间层特征
         intermediate_fused = 0
         for feat, proj in zip(intermediate_feats, self.proj_intermediate):
             feat = proj(feat)  # 投影
             intermediate_fused += feat
+        intermediate_fused=self.norm1(intermediate_fused)
         intermediate_fused=self.proj_last(intermediate_fused)
         # 融合最后一层
         last_combined = torch.cat([naclip_feat, feat], dim=-1)
         last_fused = self.fusion_last(last_combined)
+        last_fused=self.norm2(last_fused)
         # 融合中间层和最后一层
         fused = intermediate_fused + last_fused
         fused = self.fusion_layer(fused)
+        fused=self.normout(fused)
+        return fused
+
+class ChannelAttention(nn.Module):
+    """
+    通道注意力模块：融合最终层和（可选）中层全局信息，生成 [B, C] 的通道权重
+    """
+    def __init__(self, in_channels,out_channels):
+        super().__init__()
+        hidden = in_channels // 16
+        # 用 1×1 Conv1d（可看作跨通道 MLP）生成注意力
+        self.conv1 = nn.Conv1d(in_channels, hidden, 1, bias=False)
+        self.relu  = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv1d(hidden, out_channels, 1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, final_feats):
+        """
+        final_feats: list of K final features, each [B, HW, C]
+        mid_feats:    list of M mid-layer features, each [B, HW, C] or None
+        """
+        # 1. 对每个特征做 GAP 得到 [B, C]
+        pooled = [f.mean(dim=1) for f in final_feats]
+
+        # 2. 拼接所有全局 descriptor -> [B, P], P = (K+M)*C
+        cat = torch.cat(pooled, dim=-1)  # [B, (K+M)*C]
+        # 3. reshape -> [B, (K+M)*C, 1]  并过 Conv1d
+        x = cat.unsqueeze(-1)
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        # 4. sigmoid -> [B, C, 1] 取前 C 维作为最终层注意力
+        attn = self.sigmoid(x)[:,:,:1]  # [B, C, 1]
+        return attn.squeeze(-1)         # [B, C]
+
+
+class MultiScaleAwareFusion(nn.Module):
+    """
+    融合最终层特征 + 可选中层参考的全局通道注意力
+    """
+    def __init__(self, feature_dim, num_sources=3, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.num_sources = num_sources
+        hidden_dim = feature_dim
+
+        # 空间打分 MLP：决定各来源的空间融合比例
+        self.spatial_scorer = nn.Sequential(
+            nn.Conv1d(num_sources * feature_dim, hidden_dim, 1, bias=False),
+            nn.GELU(),
+            nn.Conv1d(hidden_dim, num_sources, 1)
+        )
+        # 通道注意力：融合最终层和中层信息
+        self.chan_attn = ChannelAttention(in_channels=feature_dim*num_sources,out_channels=feature_dim)
+
+    def forward(self, final_feats):
+        """
+        final_feats: list length=N of [B, HW, C] —— SegEarth, NaCLIP, ClearCLIP
+        mid_feats:    list length=M of [B, HW, C] —— clip_feat1/2/3, 或 None
+        """
+        B, HW, C = final_feats[0].shape
+        N = self.num_sources
+
+        # —— 1. 空间级融合权重 —— 
+        norms = [F.normalize(f, dim=-1, p=2, eps=self.eps) for f in final_feats]
+        cat = torch.cat(norms, dim=-1)                        # [B, HW, N*C]
+        scores = self.spatial_scorer(cat.transpose(1,2))      # [B, N, HW]
+        scores = scores.transpose(1,2)                        # [B, HW, N]
+        w_spatial = F.softmax(scores, dim=-1).unsqueeze(-1)   # [B, HW, N, 1]
+
+        # 融合最终层特征内容
+        stacked = torch.stack(final_feats, dim=2)             # [B, HW, N, C]
+        fused = (w_spatial * stacked).sum(2)                  # [B, HW, C]
+
+        # —— 2. 通道级注意力 —— 
+        attn = self.chan_attn(final_feats)         # [B, C]
+        fused = fused + 0.1 * fused * attn.unsqueeze(1)                     # [B, HW, C]
+
+        # —— 3. 保持幅度一致 —— 
+        fused = F.normalize(fused, dim=-1, eps=self.eps)
         return fused
 
 
@@ -456,7 +548,8 @@ class VisionTransformer(nn.Module):
 
         self.init_parameters()
         #融合模块
-        self.fusion=MultiScaleFusion(feature_dim=768)
+        #self.fusion=MultiScaleFusion(feature_dim=768)
+        self.fusion=MultiScaleAwareFusion(feature_dim=768)
 
     def lock(self, unlocked_groups=0, freeze_bn_stats=False):
         for param in self.parameters():
@@ -554,10 +647,13 @@ class VisionTransformer(nn.Module):
         output = 0
         naclip_output=0
         naclip_x=x
+        clearclip_output=0
+        clearclip_x=x
         blk=self.transformer.resblocks[-last_n_layers]
         if ignore_residual:
                 output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
                 naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
+                clearclip_output+=self.custom_attn(blk.attn, blk.ln_1(clearclip_x), model_type = 'ClearCLIP')
                 #x = blk(x)
                 '''
                 if model_type != "NACLIP":
@@ -571,7 +667,8 @@ class VisionTransformer(nn.Module):
             output += x_out
             x = blk(x)
         if isFusion:
-            output=self.fusion(intermediate_feats,naclip_output,output)
+            #output=self.fusion([output,naclip_output,clearclip_output])
+            output=naclip_output
             
 
         x = output.permute(1, 0, 2)  # LND -> NLD
@@ -686,7 +783,7 @@ class VisionTransformer(nn.Module):
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1)
         elif model_type in ['NACLIP', 'NOnly', 'GAV']:
-            self.gaussian_std = 5.0
+            self.gaussian_std = 5
             self.addition_cache = dict()
             n_patches = (int(np.sqrt((num_tokens - 1))), int(np.sqrt((num_tokens - 1))))
             addition = self.addition_cache.get(n_patches)
@@ -705,9 +802,11 @@ class VisionTransformer(nn.Module):
                 kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
                 vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
                 attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
-                
-                
-                
+                #attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1)
+                #attn_weights = F.softmax(qq_attn, dim=-1)
+                #attn_weights = F.softmax(kk_attn, dim=-1)
+                #attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
+                #attn_weights = F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1) #-0.7
             elif model_type == 'NOnly':
                 attn_weights = torch.zeros((num_heads, num_tokens, num_tokens)).to(x.dtype).to(x.device)
                 omega = omega * scale * torch.einsum('hop,hPO->hpP', q.norm(dim=2).unsqueeze(1), k.norm(dim=2).unsqueeze(2)).detach()
@@ -717,7 +816,7 @@ class VisionTransformer(nn.Module):
             else:
                 raise NotImplemented
             
-            lambda_local=1
+            lambda_local=0.007
             attn_weights = attn_weights + omega*lambda_local
             
             #attn_weights+=omega

@@ -14,7 +14,7 @@ from Hook import SaveTrainableModulesHook
 def parse_args():
     parser = argparse.ArgumentParser(
         description='SegEarth-OV evaluation with MMSeg')
-    parser.add_argument('--config', default='./configs/cfg_voc20.py')
+    parser.add_argument('--config', default='./configs/cfg_udd5.py')
     parser.add_argument('--work-dir', default='./work_logs/')
     parser.add_argument(
         '--show', action='store_true', help='show prediction results')

@@ -4,13 +4,13 @@ from torchvision import transforms
 from segearth_segmentor import SegEarthSegmentation
 import numpy as np
 
-img = Image.open('/data/SegEarth-OV/data/Inria/img_dir/split_test/austin1_1000_0_2000_1000.png')
+img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/demo/oem_koeln_50.tif')
 
-#name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
-#             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
+name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
+             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
 #name_list = ['background', 'building,roof,house', 'road', 'water', 'barren',
 #             'forest', 'agricultural']
-name_list=['background','building']
+#name_list=['background','building']
 with open('./configs/my_name.txt', 'w') as writers:
     for i in range(len(name_list)):
         if i == len(name_list)-1:
@@ -46,7 +46,7 @@ model = SegEarthSegmentation(
 
 seg_pred = model.predict(img_tensor, data_samples=None)
 seg_pred = seg_pred.data.cpu().numpy().squeeze(0)
-np.savetxt('output.txt',seg_pred, fmt='%.1f')
+#np.savetxt('output.txt',seg_pred, fmt='%.1f')
 fig, ax = plt.subplots(1, 2, figsize=(12, 6))
 ax[0].imshow(img)
 ax[0].axis('off')
@@ -54,4 +54,4 @@ ax[1].imshow(seg_pred, cmap='viridis')
 ax[1].axis('off')
 plt.tight_layout()
 # plt.show()
-plt.savefig('seg_pred_limit_orgin1', bbox_inches='tight')
+plt.savefig('seg_pred_limit_orgin3', bbox_inches='tight')

@@ -123,10 +123,7 @@ class SegEarthSegmentation(BaseSegmentor):
         self.model_type = model_type
         self.feature_up = feature_up
         self.isFusion=isFusion
-        if isFusion:
-            self.cls_token_lambda=-0.00001
-        else:
-            self.cls_token_lambda = cls_token_lambda
+        self.cls_token_lambda = cls_token_lambda
         self.feature_cls_token_lambda=feature_cls_token_lambda
         self.output_cls_token = cls_token_lambda != 0 or feature_cls_token_lambda != 0,
         self.bg_idx = bg_idx
@@ -171,20 +168,33 @@ class SegEarthSegmentation(BaseSegmentor):
         self.ignore_residual = ignore_residual
         self.logit_scale = logit_scale
         self.prob_thd = prob_thd
-        
+        '''
         if self.isFusion:
             # 加载训练保存的 state_dict
-            state_dict = torch.load("/data/SegEarth-OV/state_dict/VDD/no_class_weight_agjust/best_mIoU_epoch_280.pth")['state_dict']
+            state_dict = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_16000.ckpt")['state_dict']
 
             # 只提取 fusion 模块的部分，并去掉前缀 'net.visual.fusion.'
             fusion_state_dict = {
-                k.replace('net.visual.fusion.', ''): v
+                k.replace('model.visual.fusion.', ''): v
                 for k, v in state_dict.items()
-                if k.startswith('net.visual.fusion.')
+                if k.startswith('model.visual.fusion.')
             }
             # 加载到 fusion 模块中
             self.net.visual.fusion.load_state_dict(fusion_state_dict)
-        
+        '''
+        '''
+        if self.isFusion:
+            checkpoint = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_2000.ckpt")
+            state_dict = checkpoint.get('state_dict', checkpoint)
+            print("All keys in state_dict:", state_dict.keys())/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_10000.ckpt
+            fusion_state_dict = {
+                k.replace('model.model.visual.fusion.', ''): v
+                for k, v in state_dict.items()
+                if k.startswith('model.model.visual.fusion.')
+            }
+            print("Fusion keys:", fusion_state_dict.keys())
+            self.net.visual.fusion.load_state_dict(fusion_state_dict)
+        '''
         #初始化特征上采样器
         if feature_up:
             #借用提取的文本特征的最终维度来表示上采样之后的图像特征的维度（因为图像特征和文本特征需要对齐，所以最终的feature_dim维度是一致的）

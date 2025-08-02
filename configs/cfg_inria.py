@@ -39,8 +39,8 @@ train_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='/data/SegEarth-OV/data/Inria/img_dir/split_train',
-            seg_map_path='/data/SegEarth-OV/data/Inria/ann_dir/split_train'),
+            img_path='data/Inria/img_dir/split_train',
+            seg_map_path='data/Inria/ann_dir/split_train'),
         pipeline=train_pipeline
     )
 )
@@ -55,8 +55,8 @@ val_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='/data/SegEarth-OV/data/Inria/img_dir/split_test',
-            seg_map_path='/data/SegEarth-OV/data/Inria/ann_dir/split_test'),
+            img_path='data/Inria/img_dir/split_test',
+            seg_map_path='data/Inria/ann_dir/split_test'),
         pipeline=val_pipeline
     )
 )
@@ -80,8 +80,8 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='/data/SegEarth-OV/data/Inria/img_dir/split_test',
-            seg_map_path='/data/SegEarth-OV/data/Inria/ann_dir/split_test'),
+            img_path='data/Inria/img_dir/split_test',
+            seg_map_path='data/Inria/ann_dir/split_test'),
         pipeline=test_pipeline))
 
 # 训练配置(zdj)

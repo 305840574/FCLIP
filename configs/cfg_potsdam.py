@@ -5,6 +5,7 @@ model = dict(
     name_path='./configs/cls_potsdam.txt',
     prob_thd=0.1,
     bg_idx=5,
+    feature_cls_token_lambda=-0.3
 )
 
 # dataset settings

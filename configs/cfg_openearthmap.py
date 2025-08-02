@@ -86,7 +86,7 @@ test_dataloader = dict(
         pipeline=test_pipeline))
 
 # 训练配置(zdj)
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=80, val_interval=5)  # 50个周期，每5个周期验证一次
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=150, val_interval=1)  # 50个周期，每5个周期验证一次
 val_cfg = dict(type='ValLoop')
 val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
 # 优化器配置
@@ -95,5 +95,5 @@ optim_wrapper = dict(
     optimizer=dict(type='Adam', lr=0.001),   
 )
 # 学习率调度器
-param_scheduler = dict(type='MultiStepLR', by_epoch=True, milestones=[50], gamma=0.2)
+param_scheduler = dict(type='MultiStepLR', by_epoch=True, milestones=[150], gamma=0.2)
 #zdj
