@@ -1,0 +1,491 @@
+import sys
+sys.path.insert(0, '../')
+
+import gc
+import os
+import hydra
+import pytorch_lightning as pl
+import torch
+import torchvision.transforms as T
+from omegaconf import DictConfig
+from omegaconf import OmegaConf
+from pytorch_lightning import Trainer
+from pytorch_lightning import seed_everything
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
+from torch.utils.data import DataLoader
+from torchvision.transforms import InterpolationMode
+from os.path import join
+
+from featup.datasets.JitteredImage import apply_jitter, sample_transform
+from featup.datasets.util import get_dataset, SingleImageDataset
+from featup.downsamplers import SimpleDownsampler, AttentionDownsampler
+from featup.featurizers.util import get_featurizer
+from featup.layers import ChannelNorm
+from featup.losses import TVLoss, SampledCRFLoss, entropy
+from featup.upsamplers import get_upsampler, LayerNorm2d
+from featup.util import pca, RollingAvg, unnorm, norm, prep_image
+
+torch.multiprocessing.set_sharing_strategy('file_system')
+
+
+class ScaleNet(torch.nn.Module):
+
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.net = torch.nn.Conv2d(dim, 1, 1)
+        with torch.no_grad():
+            self.net.weight.copy_(self.net.weight * .1)
+            self.net.bias.copy_(self.net.bias * .1)
+
+    def forward(self, x):
+        return torch.exp(self.net(x) + .1).clamp_min(.0001)
+
+
+class SimFeatUp(pl.LightningModule):
+    def __init__(self,
+                 model_type,
+                 activation_type,
+                 n_jitters,
+                 max_pad,
+                 max_zoom,
+                 kernel_size,
+                 final_size,
+                 lr,
+                 random_projection,
+                 predicted_uncertainty,
+                 crf_weight,
+                 filter_ent_weight,
+                 tv_weight,
+                 rec_img_weight,
+                 upsampler,
+                 downsampler,
+                 chkpt_dir,
+                 ):
+        super().__init__()
+        self.model_type = model_type
+        self.activation_type = activation_type
+        self.n_jitters = n_jitters
+        self.max_pad = max_pad
+        self.max_zoom = max_zoom
+        self.kernel_size = kernel_size
+        self.final_size = final_size
+        self.lr = lr
+        self.random_projection = random_projection
+        self.predicted_uncertainty = predicted_uncertainty
+        self.crf_weight = crf_weight
+        self.filter_ent_weight = filter_ent_weight
+        self.tv_weight = tv_weight
+        self.rec_img_weight = rec_img_weight
+        self.chkpt_dir = chkpt_dir
+
+        self.model, self.patch_size, self.dim = get_featurizer(model_type, activation_type, isfusion=True, num_classes=1000)
+        #self.clip_model, _ , _ =get_featurizer(model_type, activation_type, isfusion=False, num_classes=1000)
+        self.model=self.model.to(torch.float32)
+        #self.clip_model=self.clip_model.to(torch.float32)
+        #冻结self.model参数
+        for name, param in self.model.named_parameters():
+            if 'fusion' not in name:
+                param.requires_grad = False
+        #for name, param in self.clip_model.named_parameters():
+        #    param.requires_grad = False
+        # self.model = torch.nn.Sequential(self.model, ChannelNorm(self.dim))
+        self.upsampler = get_upsampler(upsampler, self.dim)
+        #加载上采样器权重
+        ckpt = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt")['state_dict']
+        weights_dict = {k[10:]: v for k, v in ckpt.items()}
+        self.upsampler.load_state_dict(weights_dict, strict=True)
+        for name, param in self.upsampler.named_parameters():
+            param.requires_grad = False
+        '''
+        if downsampler == 'simple':
+            self.downsampler = SimpleDownsampler(self.kernel_size, self.final_size)
+        elif downsampler == 'attention':
+            self.downsampler = AttentionDownsampler(self.dim, self.kernel_size, self.final_size, blur_attn=True)
+        else:
+            raise ValueError(f"Unknown downsampler {downsampler}")
+
+        if self.predicted_uncertainty:
+            self.scale_net = ScaleNet(self.dim)
+
+        
+
+        self.crf = SampledCRFLoss(
+            alpha=.1,
+            beta=.15,
+            gamma=.005,
+            w1=10.0,
+            w2=3.0,
+            shift=0.00,
+            n_samples=1000)
+        self.tv = TVLoss()
+        '''
+        self.avg = RollingAvg(20)
+        self.automatic_optimization = False
+
+        self.projection_img = torch.nn.Sequential(
+            torch.nn.Conv2d(self.dim, self.dim, 1),
+            LayerNorm2d(self.dim),
+            torch.nn.GELU(),
+            torch.nn.Conv2d(self.dim, 3, 1),
+            torch.nn.Tanh()
+        )
+        '''
+        for name, module in self.named_modules():
+            print(f"[Module] {name}: {module.__class__.__name__}")
+
+        for name, param in self.named_parameters():
+            print(f"[Param] {name}: shape={param.shape}, requires_grad={param.requires_grad}")
+        '''
+
+
+
+    def forward(self, x):
+        return self.upsampler(self.model(x))
+
+    def project(self, feats, proj):
+        if proj is None:
+            return feats
+        else:
+            return torch.einsum("bchw,bcd->bdhw", feats, proj)
+
+    def training_step(self, batch, batch_idx):
+        opt = self.optimizers()
+        opt.zero_grad()
+
+        with torch.no_grad():
+            if type(batch) == dict:
+                img = batch['img']
+            else:
+                img, _ = batch
+        
+        
+        lr_feats = self.model(img)
+        
+        full_rec_loss = 0.0
+        full_crf_loss = 0.0
+        full_entropy_loss = 0.0
+        full_tv_loss = 0.0
+        full_total_loss = 0.0
+        full_rec_img_loss = 0.0
+        total_loss = 0.0
+        
+        for i in range(self.n_jitters):
+            #使用 upsampler 生成高分辨率特征 hr_feats，若尺寸不匹配则进行双线性插值，匹配图像尺寸
+            hr_feats = self.upsampler(lr_feats, img)
+            if hr_feats.shape[2] != img.shape[2]:
+                hr_feats = torch.nn.functional.interpolate(hr_feats, img.shape[2:], mode="bilinear")
+                
+            transform_params = sample_transform(
+                True, self.max_pad, self.max_zoom, img.shape[2], img.shape[3])
+            jit_img = apply_jitter(img, self.max_pad, transform_params)
+                #lr_jit_feats = self.model(jit_img)
+                #lr_jit_feats = self.clip_model(jit_img) #用原始CLIP提取特征作为ground_truth
+            #随机投影矩阵 proj 用于将高维特征（例如 lr_feats 的通道数）投影到较低维空间（self.random_projection 指定的维度）。
+            '''
+            if self.random_projection is not None:
+                proj = torch.randn(lr_feats.shape[0],
+                                   lr_feats.shape[1],
+                                   self.random_projection, device=lr_feats.device)
+                proj /= proj.square().sum(1, keepdim=True).sqrt()
+            else:
+                proj = None
+            '''
+            hr_jit_feats = apply_jitter(hr_feats, self.max_pad, transform_params)#对 hr_feats 应用相同抖动
+            # Johnson–Lindenstrauss lemma：Johnson-Lindenstrauss 引理 (JL 引理): 这是一个数学定理，
+            # 指出可以将高维数据投影到低维空间中，同时保证点之间的欧几里得距离（或相似性）以高概率近似保持不变。
+            #proj_hr_feats = self.project(hr_jit_feats, proj) 
+
+            #down_jit_feats = self.project(self.downsampler(hr_jit_feats, jit_img), proj)#使用 downsampler 下采样 hr_jit_feats，再应用投影
+            '''
+            if self.predicted_uncertainty:
+                scales = self.scale_net(lr_jit_feats)
+                scale_factor = (1 / (2 * scales ** 2))
+                mse = (down_jit_feats - self.project(lr_jit_feats, proj)).square()
+                rec_loss = (scale_factor * mse + scales.log()).mean() / self.n_jitters
+            else:
+                rec_loss = (self.project(lr_jit_feats, proj) - down_jit_feats).square().mean() / self.n_jitters
+            
+            full_rec_loss += rec_loss.item()
+            '''
+            #图像重构损失 (rec_img_loss)
+            rec_img = self.projection_img(hr_jit_feats)
+            rec_img_loss = (jit_img - rec_img).square().mean() / self.n_jitters
+            full_rec_img_loss += rec_img_loss.item()
+            '''
+            #使用条件随机场（CRF）平滑特征图，仅在 i == 0计算。默认不处理
+            if self.crf_weight > 0 and i == 0:
+                crf_loss = self.crf(img, proj_hr_feats)
+                full_crf_loss += crf_loss.item()
+            else:
+                crf_loss = 0.0
+            #默认不处理
+            if self.filter_ent_weight > 0.0:
+                entropy_loss = entropy(self.downsampler.get_kernel())
+                full_entropy_loss += entropy_loss.item()
+            else:
+                entropy_loss = 0
+            #默认不处理
+            if self.tv_weight > 0 and i == 0:
+                tv_loss = self.tv(proj_hr_feats.square().sum(1, keepdim=True))
+                full_tv_loss += tv_loss.item()
+            else:
+                tv_loss = 0.0
+            '''
+            loss = rec_img_loss
+            total_loss += loss
+            #full_total_loss += loss.item()
+            #self.manual_backward(loss)
+        full_total_loss = total_loss.item()
+        self.manual_backward(total_loss)
+        print(full_total_loss)
+        self.avg.add("loss/crf", full_crf_loss)
+        self.avg.add("loss/ent", full_entropy_loss)
+        self.avg.add("loss/tv", full_tv_loss)
+        self.avg.add("loss/rec", full_rec_loss)
+        self.avg.add('loss/rec_img', full_rec_img_loss)
+        self.avg.add("loss/total", full_total_loss)
+
+        #每1000轮保存一次权重
+        if self.global_step % 1000 == 0:
+            save_path = self.chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
+            self.trainer.save_checkpoint(save_path)
+            #self.trainer.save_checkpoint(self.chkpt_dir[:-5] + '/' + self.chkpt_dir[:-5] + f'_{self.global_step}.ckpt')
+            '''
+            fusion_state = {}
+            fusion_save_path = self.fusion_chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
+            model_state = self.model.state_dict()
+            for key, value in model_state.items():
+                if 'fusion' in key:
+                    fusion_state[key] = value  
+            torch.save({'state_dict': fusion_state}, fusion_save_path)
+            '''
+
+        self.avg.logall(self.log)
+        if self.global_step < 10:
+            self.clip_gradients(opt, gradient_clip_val=.0001, gradient_clip_algorithm="norm")
+
+        opt.step()
+        '''
+        print("\n==== Trainable Parameters ====")
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                print(name, param.shape)
+        '''
+
+        return None
+
+    # def on_after_backward(self):
+    #     for name, param in self.named_parameters():
+    #         if param.grad is None:
+    #             print(name)
+
+    def on_save_checkpoint(self, checkpoint):
+        # 保存 fusion 参数
+        '''
+        fusion_state = {}
+        model_state = self.model.state_dict()
+        for key, value in model_state.items():
+            if 'fusion' in key:  
+                fusion_state[key] = value
+        fusion_save_path = self.fusion_chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
+        torch.save({'state_dict': fusion_state}, fusion_save_path)
+        '''
+
+        new_state_dict = {}
+        for key, value in checkpoint['state_dict'].items():
+            if 'fusion' in key:
+                new_state_dict[key] = value
+        checkpoint['state_dict'] = new_state_dict
+
+    def validation_step(self, batch, batch_idx):
+        with torch.no_grad():
+            if self.trainer.is_global_zero and batch_idx < 0:
+
+                if type(batch) == dict:
+                    img = batch['img']
+                else:
+                    img, _ = batch
+                lr_feats = self.model(img)
+
+                hr_feats = self.upsampler(lr_feats, img)
+
+                rec_img = self.projection_img(hr_feats)
+
+                if hr_feats.shape[2] != img.shape[2]:
+                    hr_feats = torch.nn.functional.interpolate(hr_feats, img.shape[2:], mode="bilinear")
+
+                transform_params = sample_transform(
+                    True, self.max_pad, self.max_zoom, img.shape[2], img.shape[3])
+                jit_img = apply_jitter(img, self.max_pad, transform_params)
+                lr_jit_feats = self.model(jit_img)
+
+                if self.random_projection is not None:
+                    proj = torch.randn(lr_feats.shape[0],
+                                       lr_feats.shape[1],
+                                       self.random_projection, device=lr_feats.device)
+                    proj /= proj.square().sum(1, keepdim=True).sqrt()
+                else:
+                    proj = None
+
+                scales = self.scale_net(lr_jit_feats)
+
+                writer = self.logger.experiment
+
+                hr_jit_feats = apply_jitter(hr_feats, self.max_pad, transform_params)
+                down_jit_feats = self.downsampler(hr_jit_feats, jit_img)
+                
+                [red_lr_feats], fit_pca = pca([lr_feats[0].unsqueeze(0)])
+                [red_hr_feats], _ = pca([hr_feats[0].unsqueeze(0)], fit_pca=fit_pca)
+                [red_lr_jit_feats], _ = pca([lr_jit_feats[0].unsqueeze(0)], fit_pca=fit_pca)
+                [red_hr_jit_feats], _ = pca([hr_jit_feats[0].unsqueeze(0)], fit_pca=fit_pca)
+                [red_down_jit_feats], _ = pca([down_jit_feats[0].unsqueeze(0)], fit_pca=fit_pca)
+
+                writer.add_image("viz/image", unnorm(img[0].unsqueeze(0))[0], self.global_step)
+                writer.add_image("viz/rec_image", unnorm(rec_img[0].unsqueeze(0))[0], self.global_step)
+                writer.add_image("viz/lr_feats", red_lr_feats[0], self.global_step)
+                writer.add_image("viz/hr_feats", red_hr_feats[0], self.global_step)
+                writer.add_image("jit_viz/jit_image", unnorm(jit_img[0].unsqueeze(0))[0], self.global_step)
+                writer.add_image("jit_viz/lr_jit_feats", red_lr_jit_feats[0], self.global_step)
+                writer.add_image("jit_viz/hr_jit_feats", red_hr_jit_feats[0], self.global_step)
+                writer.add_image("jit_viz/down_jit_feats", red_down_jit_feats[0], self.global_step)
+
+                norm_scales = scales[0]
+                norm_scales /= scales.max()
+                writer.add_image("scales", norm_scales, self.global_step)
+                writer.add_histogram("scales hist", scales, self.global_step)
+
+                if isinstance(self.downsampler, SimpleDownsampler):
+                    writer.add_image(
+                        "down/filter",
+                        prep_image(self.downsampler.get_kernel().squeeze(), subtract_min=False),
+                        self.global_step)
+
+                if isinstance(self.downsampler, AttentionDownsampler):
+                    writer.add_image(
+                        "down/att",
+                        prep_image(self.downsampler.forward_attention(hr_feats, None)[0]),
+                        self.global_step)
+                    writer.add_image(
+                        "down/w",
+                        prep_image(self.downsampler.w.clone().squeeze()),
+                        self.global_step)
+                    writer.add_image(
+                        "down/b",
+                        prep_image(self.downsampler.b.clone().squeeze()),
+                        self.global_step)
+
+                writer.flush()
+
+    def configure_optimizers(self):
+        
+        all_params = []
+        all_params.extend(list(self.model.model.visual.fusion.parameters()))
+        #all_params.extend(list(self.downsampler.parameters()))
+        #all_params.extend(list(self.upsampler.parameters()))
+
+        #if self.predicted_uncertainty:
+        #    all_params.extend(list(self.scale_net.parameters()))
+        
+        all_params.extend(list(self.projection_img.parameters()))
+
+        return torch.optim.NAdam(all_params, lr=self.lr)
+
+
+@hydra.main(config_path="configs", config_name="upsampler_aid.yaml")
+def my_app(cfg: DictConfig) -> None:
+    print(OmegaConf.to_yaml(cfg))
+    print(cfg.output_root)
+    seed_everything(seed=0, workers=True)
+
+    load_size = 224
+
+    if cfg.model_type == "dinov2":
+        final_size = 16
+        kernel_size = 14
+    elif cfg.model_type == "maskclip_vit-b32":
+        final_size = 7
+        kernel_size = 32
+    else:
+        final_size = 14
+        kernel_size = 16
+
+    name = (f"{cfg.model_type}_{cfg.upsampler_type}_"
+            f"{cfg.dataset}_{cfg.downsampler_type}_"
+            f"crf_{cfg.crf_weight}_tv_{cfg.tv_weight}"
+            f"_ent_{cfg.filter_ent_weight}")
+
+    log_dir = join(cfg.output_root, f"logs/jbu_one/{name}")
+    chkpt_dir = join(cfg.output_root, f"checkpoints/jbu_one/fusion/{name}.ckpt")
+    #fusion_chkpt_dir = join(cfg.output_root, f"checkpoints/jbu_one/fusion/{name}.ckpt")
+    os.makedirs(log_dir, exist_ok=True)
+    #os.makedirs(fusion_chkpt_dir, exist_ok=True)
+
+    model = SimFeatUp(
+        model_type=cfg.model_type,
+        activation_type=cfg.activation_type,
+        n_jitters=cfg.n_jitters,
+        max_pad=cfg.max_pad,
+        max_zoom=cfg.max_zoom,
+        kernel_size=kernel_size,
+        final_size=final_size,
+        lr=cfg.lr,
+        random_projection=cfg.random_projection,
+        predicted_uncertainty=cfg.outlier_detection,
+        crf_weight=cfg.crf_weight,
+        filter_ent_weight=cfg.filter_ent_weight,
+        tv_weight=cfg.tv_weight,
+        rec_img_weight=cfg.rec_img_weight,
+        upsampler=cfg.upsampler_type,
+        downsampler=cfg.downsampler_type,
+        chkpt_dir=chkpt_dir,
+    )
+
+    transform = T.Compose([
+        # T.Resize(load_size, InterpolationMode.BILINEAR),
+        # T.CenterCrop(load_size),
+        T.RandomCrop(load_size, pad_if_needed=True, padding_mode='reflect'),
+        # T.RandomResizedCrop(load_size, ratio=(0.8, 1.2)),
+        T.ToTensor(),
+        norm])
+
+    dataset = get_dataset(
+        cfg.pytorch_data_dir,
+        cfg.dataset,
+        transform=transform)
+
+    loader = DataLoader(
+        dataset, cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
+    
+    val_loader = DataLoader(
+        SingleImageDataset(0, dataset, 1), 1, shuffle=False, num_workers=cfg.num_workers)
+
+    tb_logger = TensorBoardLogger(log_dir, default_hp_metric=False)
+    callbacks = [ModelCheckpoint(chkpt_dir[:-5], every_n_epochs=1)]
+    # callbacks = [EarlyStopping(monitor="loss/total", mode="min")]
+
+    trainer = Trainer(
+        accelerator='gpu',
+        strategy="ddp",
+        devices=cfg.num_gpus,
+        max_epochs=cfg.epochs,
+        logger=tb_logger,
+        val_check_interval=1000,
+        log_every_n_steps=10,
+        callbacks=callbacks,
+        reload_dataloaders_every_n_epochs=1,
+        precision=32,
+    )
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    trainer.fit(model, loader, val_loader)
+    trainer.save_checkpoint(chkpt_dir)
+
+
+if __name__ == "__main__":
+    my_app()
