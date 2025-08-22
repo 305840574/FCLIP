@@ -5,7 +5,7 @@ model = dict(
     name_path='./configs/cls_potsdam.txt',
     prob_thd=0.1,
     bg_idx=5,
-    feature_cls_token_lambda=-0.3
+    feature_cls_token_lambda=2
 )
 
 # dataset settings
@@ -22,7 +22,7 @@ test_pipeline = [
 ]
 
 test_dataloader = dict(
-    batch_size=1,
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),

@@ -162,7 +162,7 @@ class SimFeatUp(pl.LightningModule):
                 img, _ = batch
         
         
-        lr_feats = self.model(img)
+        
         
         full_rec_loss = 0.0
         full_crf_loss = 0.0
@@ -173,6 +173,7 @@ class SimFeatUp(pl.LightningModule):
         total_loss = 0.0
         
         for i in range(self.n_jitters):
+            lr_feats = self.model(img)
             #使用 upsampler 生成高分辨率特征 hr_feats，若尺寸不匹配则进行双线性插值，匹配图像尺寸
             hr_feats = self.upsampler(lr_feats, img)
             if hr_feats.shape[2] != img.shape[2]:
@@ -235,12 +236,12 @@ class SimFeatUp(pl.LightningModule):
                 tv_loss = 0.0
             '''
             loss = rec_img_loss
-            total_loss += loss
-            #full_total_loss += loss.item()
-            #self.manual_backward(loss)
-        full_total_loss = total_loss.item()
-        self.manual_backward(total_loss)
-        print(full_total_loss)
+            #total_loss += loss
+            full_total_loss += loss.item()
+            self.manual_backward(loss)
+        #full_total_loss = total_loss.item()
+        #self.manual_backward(total_loss)
+        #print(full_total_loss)
         self.avg.add("loss/crf", full_crf_loss)
         self.avg.add("loss/ent", full_entropy_loss)
         self.avg.add("loss/tv", full_tv_loss)

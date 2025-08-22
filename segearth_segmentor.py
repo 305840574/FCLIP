@@ -20,6 +20,16 @@ from BLIP.models.blip_retrieval import blip_retrieval
 import gem
 from simfeatup_dev.upsamplers import get_upsampler
 
+from collections import OrderedDict
+import math
+from typing import Callable, Optional, Sequence, Tuple
+from functools import partial
+
+from torch.utils.checkpoint import checkpoint
+
+#from .utils import to_2tuple
+#from pos_embed.py import get_2d_sincos_pos_embed
+
 @MODELS.register_module()
 class SegEarthSegmentation(BaseSegmentor):
     def __init__(self,
@@ -36,6 +46,8 @@ class SegEarthSegmentation(BaseSegmentor):
                  slide_crop=224,
                  cls_token_lambda=0,
                  feature_cls_token_lambda=0,
+                 lambda_local=0.01,
+                 gaussian_std=5,
                  bg_idx=0,
                  feature_up=True,
                  feature_up_cfg=dict(
@@ -125,6 +137,8 @@ class SegEarthSegmentation(BaseSegmentor):
         self.isFusion=isFusion
         self.cls_token_lambda = cls_token_lambda
         self.feature_cls_token_lambda=feature_cls_token_lambda
+        self.lambda_local=lambda_local
+        self.gaussian_std=gaussian_std
         self.output_cls_token = cls_token_lambda != 0 or feature_cls_token_lambda != 0,
         self.bg_idx = bg_idx
         self.slide_stride = slide_stride
@@ -171,7 +185,7 @@ class SegEarthSegmentation(BaseSegmentor):
         '''
         if self.isFusion:
             # 加载训练保存的 state_dict
-            state_dict = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_16000.ckpt")['state_dict']
+            state_dict = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/state_dict/zeroshot1/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_18800.ckpt")['state_dict']
 
             # 只提取 fusion 模块的部分，并去掉前缀 'net.visual.fusion.'
             fusion_state_dict = {
@@ -184,9 +198,9 @@ class SegEarthSegmentation(BaseSegmentor):
         '''
         '''
         if self.isFusion:
-            checkpoint = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_2000.ckpt")
+            checkpoint = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/state_dict/zeroshot1/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_150000.ckpt")
             state_dict = checkpoint.get('state_dict', checkpoint)
-            print("All keys in state_dict:", state_dict.keys())/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_10000.ckpt
+            print("All keys in state_dict:", state_dict.keys())
             fusion_state_dict = {
                 k.replace('model.model.visual.fusion.', ''): v
                 for k, v in state_dict.items()
@@ -219,6 +233,7 @@ class SegEarthSegmentation(BaseSegmentor):
     def forward_feature(self, img, logit_size=None):
         if type(img) == list:
             img = img[0]
+        batch_size=img.shape[0]
         img = img.cuda()
         #print(img)
         #图像特征提取
@@ -229,15 +244,14 @@ class SegEarthSegmentation(BaseSegmentor):
         elif self.model_type == 'GEM':
             image_features = self.net.visual(img)
         else:
-            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.isFusion)
+            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.isFusion,self.lambda_local,self.gaussian_std)
         #全局偏见缓解（CLS Token 处理）
         if self.output_cls_token:
             image_cls_token, image_features = image_features
             image_cls_token_time=image_cls_token
             image_cls_token = image_cls_token/image_cls_token_time.norm(dim=-1, keepdim=True)
-            
             #特征级融合
-            cls_features = image_cls_token.view(1, 1, -1)  # 形状 (1, 1, feat_dim)
+            cls_features = image_cls_token.view(batch_size, 1, -1)  # 形状 (1, 1, feat_dim)
             image_features = image_features + self.feature_cls_token_lambda*cls_features  # 形状 (1, num_patches, feat_dim)
             
             #logits融合
@@ -248,16 +262,21 @@ class SegEarthSegmentation(BaseSegmentor):
             #计算图像经过特征提取之后的特征图的分辨率
             feature_w, feature_h = img[0].shape[-2] // self.patch_size[0], img[0].shape[-1] // self.patch_size[1]
             image_w, image_h = img[0].shape[-2], img[0].shape[-1]
-            image_features = image_features.permute(0, 2, 1).view(1, self.feat_dim, feature_w, feature_h)
+            image_features = image_features.permute(0, 2, 1).view(batch_size, self.feat_dim, feature_w, feature_h)
             #with torch.cuda.amp.autocast():
             #    image_features = self.upsampler(image_features, img).half()
             image_features = self.upsampler(image_features, img)
-            image_features = image_features.view(1, self.feat_dim, image_w * image_h).permute(0, 2, 1)
+            image_features = image_features.view(batch_size, self.feat_dim, image_w * image_h).permute(0, 2, 1)
         image_features_time=image_features
+        #image_features = self.apply_gaussian_weight_flat(feature_map_flat=image_features, gaussian_std=1.0, lambda_local=0.05)
         image_features = image_features/image_features_time.norm(dim=-1, keepdim=True)
+
+        
         #相似性计算
         logits = image_features @ self.query_features.T
+
         if self.output_cls_token:
+            cls_logits = cls_logits.unsqueeze(1)
             logits = logits + cls_logits * self.cls_token_lambda
 
             # # CLIP Surgery
@@ -279,13 +298,13 @@ class SegEarthSegmentation(BaseSegmentor):
         else:
             w, h = img[0].shape[-2] // self.patch_size[0], img[0].shape[-1] // self.patch_size[1]
         out_dim = logits.shape[-1]
-        logits = logits.permute(0, 2, 1).reshape(-1, out_dim, w, h)
-        #print(logits)
+        logits = logits.permute(0, 2, 1).reshape(batch_size, out_dim, w, h)
+        
         if logit_size == None:
             logits = nn.functional.interpolate(logits, size=img.shape[-2:], mode='bilinear')
         else:
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
-        #print(logits)
+        
         return logits
     '''
     滑动窗口推理(Sliding-Window Inference):
@@ -381,6 +400,7 @@ class SegEarthSegmentation(BaseSegmentor):
     '''
     def postprocess_result(self, seg_logits, data_samples):
         batch_size = seg_logits.shape[0]
+        '''
         for i in range(batch_size):
             seg_logits = seg_logits[i] * self.logit_scale
             seg_logits = seg_logits.softmax(0)  # n_queries * w * h
@@ -402,6 +422,32 @@ class SegEarthSegmentation(BaseSegmentor):
                 data_samples[i].set_data({
                     'seg_logits':
                         PixelData(**{'data': seg_logits}),
+                    'pred_sem_seg':
+                        PixelData(**{'data': seg_pred})
+                })
+        return data_samples
+    '''
+        for i in range(batch_size):
+            logits_i = seg_logits[i] * self.logit_scale
+            logits_i = logits_i.softmax(0)  # n_queries * w * h
+            #映射查询到类别
+            num_cls, num_queries = max(self.query_idx) + 1, len(self.query_idx)
+            if num_cls != num_queries:
+                logits_i = logits_i.unsqueeze(0)
+                cls_index = nn.functional.one_hot(self.query_idx)
+                cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)
+                logits_i = (logits_i * cls_index).max(1)[0]
+            #生成分割掩码
+            seg_pred = logits_i.argmax(0, keepdim=True)#对类别维度（第 0 维）取最大值，生成分割掩码
+            #如果最大概率低于 self.prob_thd，将该像素的类别设为背景（self.bg_idx）
+            seg_pred[logits_i.max(0, keepdim=True)[0] < self.prob_thd] = self.bg_idx
+
+            if data_samples is None:
+                return seg_pred
+            else:
+                data_samples[i].set_data({
+                    'seg_logits':
+                        PixelData(**{'data': logits_i}),
                     'pred_sem_seg':
                         PixelData(**{'data': seg_pred})
                 })
@@ -458,6 +504,117 @@ class SegEarthSegmentation(BaseSegmentor):
         # 汇总损失
         losses['loss'] = sum(losses.values())
         return losses
+    @staticmethod
+    def gaussian_window(dim1, dim2, std=1., device='cpu'):
+        constant = 1 / (std * math.sqrt(2))
+        ks = list()
+        for dim in [dim1, dim2]:
+            start = -(dim - 1) / 2.0
+            k = torch.linspace(start=start * constant,
+                               end=(start + (dim - 1)) * constant,
+                               steps=dim,
+                               dtype=torch.float,
+                               device=device)
+            ks.append(k)
+        dist_square_to_mu = (torch.stack(torch.meshgrid(*ks, indexing='ij')) ** 2).sum(0)
+        return torch.exp(-dist_square_to_mu)
+
+    @staticmethod
+    def get_attention_addition(dim1, dim2, window):
+        print("ready!")
+        m = torch.einsum('ij,kl->ijkl', torch.eye(dim1, device=window.device), torch.eye(dim2, device=window.device))
+        
+        m = m.permute((0, 3, 1, 2)).contiguous()  # m[ijkl] = 1 iff (i, j) == (k, l)
+        
+        out = F.conv2d(m.view(-1, dim1, dim2).unsqueeze(1), window.unsqueeze(0).unsqueeze(1), padding='same').squeeze(1)
+        print("done")
+        out = out.view(dim1 * dim2, dim1 * dim2)
+        return out
+    def apply_gaussian_weight_flat(self, feature_map_flat, gaussian_std=5, lambda_local=0.007):
+        """
+        将高斯加权局部偏置应用到已展平的特征图上。
+        """
+
+        batch_size, num_tokens, d_model = feature_map_flat.size()
+        side_length = int(math.sqrt(num_tokens))
+        height, width = side_length, side_length
+        
+        # 将展平的特征图重新整形为2D图像形状
+        feature_map_2d = feature_map_flat.permute(0, 2, 1).view(batch_size, d_model, height, width)
+
+        # 1. 创建一个固定大小的高斯窗口
+        # 选择一个较小的、可控的窗口大小，例如 31
+        window_size = 65 
+        #window_center = (window_size - 1) / 2
+        # 注意：这里我们只创建一个中心化的窗口，因为它会作为卷积核使用
+        window = self.gaussian_window(window_size, window_size, std=gaussian_std, device=feature_map_flat.device)
+        # 将窗口 reshape 成适合conv2d的卷积核形状 (out_channels, in_channels, kernel_h, kernel_w)
+        # 由于我们对每个特征通道应用相同的权重，所以输入和输出通道都是d_model
+        # 注意：这里可能需要根据你的具体模型和需求调整
+        window = window.view(1, 1, window_size, window_size).repeat(d_model, 1, 1, 1)
+
+        # 2. 应用高斯卷积
+        # 使用分组卷积（groups=d_model）对每个通道独立进行卷积，以实现局部加权
+        # 这里的卷积操作将每个像素的特征值与其局部邻域内的加权值进行求和
+        weighted_features_2d = F.conv2d(feature_map_2d, window, padding='same', groups=d_model)
+
+        # 3. 将加权后的特征与原始特征相加
+        output_feature_map_2d = feature_map_2d + weighted_features_2d * lambda_local
+
+        # 4. 将输出特征图重新展平回 (B, H*W, C) 形状
+        output_feature_map_flat = output_feature_map_2d.view(batch_size, d_model, -1).permute(0, 2, 1)
+
+        return output_feature_map_flat
+    
+    def apply_gaussian_weight_flat_origin(self,feature_map_flat, gaussian_std=5, lambda_local=0.007):
+        """
+        将高斯加权局部偏置应用到已展平的特征图上。
+
+        参数:
+            feature_map_flat (torch.Tensor): 已展平的输入特征图张量，形状为 (B, H*W, C)。
+                                            例如：torch.Size([1, 50176, 512])
+            gaussian_std (float): 高斯窗口的标准差，控制局部加权的范围。
+            lambda_local (float): 局部偏置的权重因子，控制其对最终特征图的影响程度。
+
+        返回:
+            torch.Tensor: 经过高斯加权后，带有局部偏置的特征图。
+        """
+        # 确保输入是3D张量
+        if feature_map_flat.dim() != 3:
+            raise ValueError("输入特征图必须是形状为 (B, H*W, C) 的3D张量")
+
+        batch_size, num_tokens, d_model = feature_map_flat.size()
+        
+        # 从 num_tokens (H*W) 推断出原始的 height 和 width
+        side_length = int(math.sqrt(num_tokens))
+        
+        height, width = side_length, side_length
+        
+        # 1. 生成高斯偏置矩阵 (omega)
+        # 调用你提供的函数来生成高斯窗口和偏置矩阵
+        window = SegEarthSegmentation.gaussian_window(height * 2 - 1, width * 2 - 1, std=gaussian_std,device=feature_map_flat.device)
+        print(f"window device: {window.device}") # 添加这行来检查
+        # omega 的计算是耗时步骤，在这里打印以确认数据设备
+        print(f"开始计算 omega，输入张量设备：{feature_map_flat.device}")
+        omega = SegEarthSegmentation.get_attention_addition(height, width, window)
+        
+        print(omega.shape)
+        print(f"结束计算 omega：{omega.device}")
+        # 2. 将偏置矩阵的形状扩展以匹配批次大小，并移动到正确的设备
+        # omega 的形状为 (1, H*W, H*W)
+        omega = omega.unsqueeze(0).to(feature_map_flat.dtype).to(feature_map_flat.device)
+
+        # 3. 应用高斯偏置
+        # 我们使用批量矩阵乘法来应用偏置。这相当于对每个 token 的特征向量
+        # 进行加权求和，权重由 omega 矩阵提供。
+        # torch.bmm(omega, feature_map_flat) 的形状是 (B, H*W, H*W) @ (B, H*W, C) -> (B, H*W, C)
+        weighted_x = torch.bmm(omega.expand(batch_size, -1, -1), feature_map_flat)
+        
+        # 4. 将加权后的偏置特征加到原始特征图上
+        # 通过 lambda_local 来控制偏置的影响程度
+        output_feature_map = feature_map_flat + weighted_x * lambda_local
+
+        return output_feature_map
     
 
 '''

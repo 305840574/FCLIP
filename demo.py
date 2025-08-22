@@ -4,10 +4,13 @@ from torchvision import transforms
 from segearth_segmentor import SegEarthSegmentation
 import numpy as np
 
-img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/demo/oem_koeln_50.tif')
+img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/data/iSAID/img_dir/val/P2689_1024_1920_2560_3456.png')
 
-name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
-             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
+name_list=['background','ship','store tank','baseball diamond','tennis court','basketball court',
+           'ground track field','bridge','large vehicle','small vehicle','helicopter','swimming pool',
+           'roundabout','soccer ball field','plane','harbor']
+#name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
+#             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
 #name_list = ['background', 'building,roof,house', 'road', 'water', 'barren',
 #             'forest', 'agricultural']
 #name_list=['background','building']

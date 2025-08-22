@@ -107,6 +107,20 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
         img_H = patch_H
         img_W = patch_W
 
+    # 新增：构建一个完整的调色板
+    full_palette = [0] * 256 * 3
+    for idx, rgb in UAVid_palette.items():
+        # 这里需要注意，UAVid_convert_from_color 已经将类别 7 转换成了 3
+        # 所以调色板中只需要包含实际存在的类别
+        if idx != 7:
+            full_palette[idx * 3] = rgb[0]
+            full_palette[idx * 3 + 1] = rgb[1]
+            full_palette[idx * 3 + 2] = rgb[2]
+    # 填充 pad_val=255 的颜色
+    full_palette[255 * 3] = 255
+    full_palette[255 * 3 + 1] = 255
+    full_palette[255 * 3 + 2] = 255
+
     for x in range(0, img_W, patch_W - overlap):
         for y in range(0, img_H, patch_H - overlap):
             x_str = x
@@ -124,6 +138,7 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
 
             lab_patch = label[y_str:y_end, x_str:x_end]
             lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
+            lab_patch.putpalette(full_palette)
 
             pre_name = src_path.split('/')[-3] + '_'
             image = pre_name + osp.basename(src_path).split('.')[0] + '_' + str(

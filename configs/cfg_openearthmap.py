@@ -4,6 +4,11 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_openearthmap.txt',
     prob_thd=0.1,
+    #feature_cls_token_lambda=-1.6,
+    cls_token_lambda=-0.3,
+    lambda_local=0.01,
+    gaussian_std=5,
+    model_type='SegEarth'
 )
 
 # dataset settings
@@ -64,7 +69,7 @@ val_dataloader = dict(
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
+    dict(type='Resize', scale=(990, 990), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

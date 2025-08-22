@@ -326,7 +326,7 @@ class VisionTransformer(nn.Module):
         self.patch_size = patch_size
 
         #融合模块
-        self.fusion=MultiScaleFusion(feature_dim=768).to(torch.float32)
+        #self.fusion=MultiScaleFusion(feature_dim=768).to(torch.float32)
 
     def forward(self, x: torch.Tensor, isfusion: bool = True ,patch_output: bool = False, last_n_layers: int = 1):
         _, _, w, h = x.shape
@@ -562,7 +562,15 @@ class CLIP(nn.Module):
 
     def get_patch_encodings(self, image, isfusion) -> torch.Tensor:
         """ Get the encodings for each patch in the image """
-        return self.visual(image.to(torch.float32),isfusion, patch_output=True, )
+        #return self.visual(image.to(torch.float32),isfusion, patch_output=True,) 浮点
+        return self.visual(image.type(self.dtype),isfusion, patch_output=True,)
+        '''
+        if isfusion:
+            return self.visual(image.to(torch.float32),isfusion, patch_output=True,)
+        else :
+            return self.visual(image,isfusion, patch_output=True,)
+        '''
+
 
     def get_image_encoder_projection(self) -> nn.Parameter:
         """ Get vision transformer projection matrix."""

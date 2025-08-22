@@ -243,10 +243,11 @@ class ResidualAttentionBlock(nn.Module):
             k_x: Optional[torch.Tensor] = None,
             v_x: Optional[torch.Tensor] = None,
             attn_mask: Optional[torch.Tensor] = None,
+            scale: float = 1.0, 
     ):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
-
+        
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
@@ -618,7 +619,7 @@ class VisionTransformer(nn.Module):
 
         return pooled, tokens
 
-    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, isFusion=True,last_n_layers=1):
+    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, isFusion=True,lambda_local=0.01,gaussian_std=5.0,last_n_layers=1):
         B, nc, w, h = x.shape
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
@@ -640,7 +641,10 @@ class VisionTransformer(nn.Module):
         # 提取中间层特征
         intermediate_feats = []
         for i, blk in enumerate(self.transformer.resblocks[:-last_n_layers]):
-            x = blk(x)
+            scale=1.0
+            if i==10:
+                scale=0
+            x = blk(x,scale=scale)
             if i in [2, 5, 8] and isFusion:
                intermediate_feats.append(x)
 
@@ -651,9 +655,9 @@ class VisionTransformer(nn.Module):
         clearclip_x=x
         blk=self.transformer.resblocks[-last_n_layers]
         if ignore_residual:
-                output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-                naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
-                clearclip_output+=self.custom_attn(blk.attn, blk.ln_1(clearclip_x), model_type = 'ClearCLIP')
+                output += self.custom_attn(blk.attn, blk.ln_1(x), lambda_local,gaussian_std,model_type=model_type)
+                #naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
+                #clearclip_output+=self.custom_attn(blk.attn, blk.ln_1(clearclip_x), model_type = 'ClearCLIP')
                 #x = blk(x)
                 '''
                 if model_type != "NACLIP":
@@ -662,13 +666,14 @@ class VisionTransformer(nn.Module):
                     x = blk.ln_1(blk.ls_1(x))
                 '''
         else:
-            x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-            x_out = x_out + blk.mlp(blk.ln_2(x_out))
+            x_out = self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type) + x
+            x_out = x_out + blk.mlp(blk.ln_2(x_out))*0
             output += x_out
+
             x = blk(x)
-        if isFusion:
+        #if isFusion:
             #output=self.fusion([output,naclip_output,clearclip_output])
-            output=naclip_output
+            #output=naclip_output
             
 
         x = output.permute(1, 0, 2)  # LND -> NLD
@@ -749,7 +754,7 @@ class VisionTransformer(nn.Module):
             out = torch.hstack([torch.zeros((dim1 * dim2 + 1, 1)), v_adjusted])
         return out
     
-    def custom_attn(self, attn_layer, x, model_type='ClearCLIP'):
+    def custom_attn(self, attn_layer, x, lambda_local=0.01,gaussian_std=5.0,model_type='ClearCLIP'):
 
         num_heads = attn_layer.num_heads
         num_tokens, bsz, embed_dim = x.size()
@@ -783,14 +788,14 @@ class VisionTransformer(nn.Module):
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1)
         elif model_type in ['NACLIP', 'NOnly', 'GAV']:
-            self.gaussian_std = 5
+            #self.gaussian_std = 5
             self.addition_cache = dict()
             n_patches = (int(np.sqrt((num_tokens - 1))), int(np.sqrt((num_tokens - 1))))
             addition = self.addition_cache.get(n_patches)
             if addition is None:
                 window_size = [side * 2 - 1 for side in n_patches]
                 #window_size=n_patches
-                window = VisionTransformer.gaussian_window(*window_size, std=self.gaussian_std)
+                window = VisionTransformer.gaussian_window(*window_size, std=gaussian_std)
                 addition = VisionTransformer.get_attention_addition(*n_patches, window).unsqueeze(0).to(x.dtype).to(x.device)
                 self.addition_cache[n_patches] = addition
             omega = addition.clone()
@@ -816,13 +821,14 @@ class VisionTransformer(nn.Module):
             else:
                 raise NotImplemented
             
-            lambda_local=0.007
+            #lambda_local=0.01
             attn_weights = attn_weights + omega*lambda_local
             
             #attn_weights+=omega
             #当使用Q-Q，K-K，V-V注意力+高斯核时，不需要softmax
             if model_type != 'NACLIP':
                 attn_weights = F.softmax(attn_weights, dim=-1)
+            #attn_weights = F.softmax(attn_weights, dim=-1)
 
         attn_output = torch.bmm(attn_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)

@@ -38,13 +38,35 @@ iSAID_invert_palette = {v: k for k, v in iSAID_palette.items()}
 def iSAID_convert_from_color(arr_3d, palette=iSAID_invert_palette):
     """RGB-color encoding to grayscale labels."""
     arr_2d = np.zeros((arr_3d.shape[0], arr_3d.shape[1]), dtype=np.uint8)
-
+    
     for c, i in palette.items():
         m = np.all(arr_3d == np.array(c).reshape(1, 1, 3), axis=2)
         arr_2d[m] = i
 
     return arr_2d
+def iSAID_convert_from_color_robust(arr_3d, palette=iSAID_invert_palette):
+    """RGB-color encoding to grayscale labels with distance-based matching."""
+    arr_2d = np.zeros((arr_3d.shape[0], arr_3d.shape[1]), dtype=np.uint8)
+    
+    # 将调色板转换为 NumPy 数组以便高效计算
+    palette_colors = np.array(list(palette.keys()))  # RGB colors
+    palette_indices = np.array(list(palette.values())) # Class IDs
 
+    # 遍历图像中的每个像素
+    for y in range(arr_3d.shape[0]):
+        for x in range(arr_3d.shape[1]):
+            pixel_color = arr_3d[y, x, :]
+            
+            # 计算当前像素与所有调色板颜色的欧氏距离
+            distances = np.sqrt(np.sum((palette_colors - pixel_color)**2, axis=1))
+            
+            # 找到距离最近的调色板颜色索引
+            min_dist_index = np.argmin(distances)
+            
+            # 将像素分配给最近的类别
+            arr_2d[y, x] = palette_indices[min_dist_index]
+
+    return arr_2d
 
 def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
     img = np.asarray(Image.open(src_path).convert('RGB'))
@@ -118,6 +140,17 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
         img_H = patch_H
         img_W = patch_W
 
+    # 构建一个完整的调色板，包含256个条目，以备Pillow使用
+    full_palette = [0] * 256 * 3
+    for idx, rgb in iSAID_palette.items():
+        full_palette[idx * 3] = rgb[0]
+        full_palette[idx * 3 + 1] = rgb[1]
+        full_palette[idx * 3 + 2] = rgb[2]
+    # pad_val=255 的情况
+    full_palette[255 * 3] = 255
+    full_palette[255 * 3 + 1] = 255
+    full_palette[255 * 3 + 2] = 255
+
     for x in range(0, img_W, patch_W - overlap):
         for y in range(0, img_H, patch_H - overlap):
             x_str = x
@@ -135,7 +168,10 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
 
             lab_patch = label[y_str:y_end, x_str:x_end]
             lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
-
+            
+            # 使用手动创建的调色板
+            lab_patch.putpalette(full_palette)
+            
             image = osp.basename(src_path).split('.')[0].split(
                 '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
                     x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'

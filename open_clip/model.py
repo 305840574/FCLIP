@@ -268,8 +268,10 @@ class CLIP(nn.Module):
                      ignore_residual: bool = False,
                      output_cls_token: bool = False,
                      isFusion:bool = True,
+                     lambda_local:float = 0.01,
+                     gaussian_std:float = 5.0,
                      normalize: bool = False):
-        features = self.visual(image, model_type, ignore_residual, output_cls_token,isFusion)
+        features = self.visual(image, model_type, ignore_residual, output_cls_token,isFusion,lambda_local,gaussian_std)
         if output_cls_token:
             cls_token, features = features
             return F.normalize(cls_token, dim=-1) if normalize else cls_token, \

@@ -3,16 +3,18 @@ model = dict(
     type='SegEarthSegmentation',
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
-    model_type='SegEarth',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
+    model_type='NACLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
     ignore_residual=True,
-    isFusion=True,
+    isFusion=False,
     feature_up=True,
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-        #model_path='/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/upsampler/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_20000.ckpt'),
+        #model_path='/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_5200.ckpt'),
     cls_token_lambda= -0.3,
-    feature_cls_token_lambda= -1.6,
+    feature_cls_token_lambda= 0,
+    lambda_local=0.01,
+    gaussian_std=5,
 )
 
 # 评估器

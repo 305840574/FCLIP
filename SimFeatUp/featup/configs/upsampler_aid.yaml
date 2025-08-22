@@ -11,7 +11,7 @@ model_type: "xclip"
 activation_type: "token"
 
 # Upsampling args
-outlier_detection: False
+outlier_detection: True
 upsampler_type: "jbu_one"
 downsampler_type: "attention"
 max_pad: 20
@@ -27,10 +27,10 @@ implicit_sup_weight: 1.0
 
 # Training args
 batch_size: 1
-epochs: 3
+epochs: 1
 num_gpus: 1
 num_workers: 4
-lr: 5e-3
+lr: 1e-3
 
 # No need to change
 hydra:
