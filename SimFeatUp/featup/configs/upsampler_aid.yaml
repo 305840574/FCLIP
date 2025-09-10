@@ -26,8 +26,8 @@ rec_img_weight: 0.1
 implicit_sup_weight: 1.0
 
 # Training args
-batch_size: 1
-epochs: 1
+batch_size: 4
+epochs: 2
 num_gpus: 1
 num_workers: 4
 lr: 1e-3

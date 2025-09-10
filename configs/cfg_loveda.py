@@ -4,11 +4,13 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_loveda.txt',
     prob_thd=0.3,
-    #feature_cls_token_lambda=-1.0,
+    lambda_global=-1,
     cls_token_lambda=-0.3,
     lambda_local=0.01,
-    gaussian_std=1,
-    #model_type='SegEarth'
+    gaussian_std=3,
+    fusion_weight=-0.5,
+    #model_type='SegEarth',
+    #intermediate_fusion=True,
 )
 
 # dataset settings
@@ -19,7 +21,7 @@ data_root = ''
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(500, 500), keep_ratio=True),
+    dict(type='Resize', scale=(448, 448), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

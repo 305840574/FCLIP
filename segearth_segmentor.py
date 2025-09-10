@@ -39,15 +39,17 @@ class SegEarthSegmentation(BaseSegmentor):
                  name_path,
                  device=torch.device('cuda'),
                  ignore_residual=True,
-                 isFusion=True,
+                 intermediate_fusion=True,
+                 attention_bias=False,
                  prob_thd=0.0,
                  logit_scale=50,
                  slide_stride=112,
                  slide_crop=224,
                  cls_token_lambda=0,
-                 feature_cls_token_lambda=0,
+                 lambda_global=0,
                  lambda_local=0.01,
                  gaussian_std=5,
+                 fusion_weight=-0.5,
                  bg_idx=0,
                  feature_up=True,
                  feature_up_cfg=dict(
@@ -134,12 +136,15 @@ class SegEarthSegmentation(BaseSegmentor):
         self.vit_type = vit_type
         self.model_type = model_type
         self.feature_up = feature_up
-        self.isFusion=isFusion
+        self.intermediate_fusion=intermediate_fusion
+        self.attention_bias=attention_bias
         self.cls_token_lambda = cls_token_lambda
-        self.feature_cls_token_lambda=feature_cls_token_lambda
+        self.lambda_global=lambda_global
         self.lambda_local=lambda_local
+        self.fusion_weight=fusion_weight
         self.gaussian_std=gaussian_std
-        self.output_cls_token = cls_token_lambda != 0 or feature_cls_token_lambda != 0,
+        self.output_cls_token = cls_token_lambda != 0 or lambda_global != 0,
+        self.global_fusion=lambda_global != 0,
         self.bg_idx = bg_idx
         self.slide_stride = slide_stride
         self.slide_crop = slide_crop
@@ -183,7 +188,7 @@ class SegEarthSegmentation(BaseSegmentor):
         self.logit_scale = logit_scale
         self.prob_thd = prob_thd
         '''
-        if self.isFusion:
+        if self.intermediate_fusion:
             # 加载训练保存的 state_dict
             state_dict = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/state_dict/zeroshot1/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_18800.ckpt")['state_dict']
 
@@ -197,14 +202,14 @@ class SegEarthSegmentation(BaseSegmentor):
             self.net.visual.fusion.load_state_dict(fusion_state_dict)
         '''
         '''
-        if self.isFusion:
-            checkpoint = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/state_dict/zeroshot1/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_150000.ckpt")
+        if self.intermediate_fusion:
+            checkpoint = torch.load("/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/fusion/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_3400.ckpt")
             state_dict = checkpoint.get('state_dict', checkpoint)
             print("All keys in state_dict:", state_dict.keys())
             fusion_state_dict = {
-                k.replace('model.model.visual.fusion.', ''): v
+                k.replace('model.visual.fusion.', ''): v
                 for k, v in state_dict.items()
-                if k.startswith('model.model.visual.fusion.')
+                if k.startswith('model.visual.fusion.')
             }
             print("Fusion keys:", fusion_state_dict.keys())
             self.net.visual.fusion.load_state_dict(fusion_state_dict)
@@ -244,16 +249,18 @@ class SegEarthSegmentation(BaseSegmentor):
         elif self.model_type == 'GEM':
             image_features = self.net.visual(img)
         else:
-            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.isFusion,self.lambda_local,self.gaussian_std)
+            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.intermediate_fusion,self.attention_bias,self.lambda_local,self.gaussian_std,self.fusion_weight)
         #全局偏见缓解（CLS Token 处理）
         if self.output_cls_token:
             image_cls_token, image_features = image_features
             image_cls_token_time=image_cls_token
             image_cls_token = image_cls_token/image_cls_token_time.norm(dim=-1, keepdim=True)
-            #特征级融合
-            cls_features = image_cls_token.view(batch_size, 1, -1)  # 形状 (1, 1, feat_dim)
-            image_features = image_features + self.feature_cls_token_lambda*cls_features  # 形状 (1, num_patches, feat_dim)
-            
+
+            if self.global_fusion:
+                #特征级融合
+                cls_features = image_cls_token.view(batch_size, 1, -1)  # 形状 (1, 1, feat_dim)
+                image_features = image_features + self.lambda_global*cls_features  # 形状 (1, num_patches, feat_dim)
+                
             #logits融合
             cls_logits = image_cls_token @ self.query_features.T
 

@@ -4,16 +4,17 @@ from torchvision import transforms
 from segearth_segmentor import SegEarthSegmentation
 import numpy as np
 
-img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/data/iSAID/img_dir/val/P2689_1024_1920_2560_3456.png')
+img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/demo/Vaihingen_area2_0_0_512_512.png')
 
-name_list=['background','ship','store tank','baseball diamond','tennis court','basketball court',
-           'ground track field','bridge','large vehicle','small vehicle','helicopter','swimming pool',
-           'roundabout','soccer ball field','plane','harbor']
+#name_list=['background','ship','store tank','baseball diamond','tennis court','basketball court',
+#           'ground track field','bridge','large vehicle','small vehicle','helicopter','swimming pool',
+#           'roundabout','soccer ball field','plane','harbor']
 #name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
 #             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
 #name_list = ['background', 'building,roof,house', 'road', 'water', 'barren',
 #             'forest', 'agricultural']
 #name_list=['background','building']
+name_list=['impervious surfaces','building','low vegetation','tree','car','clutter']
 with open('./configs/my_name.txt', 'w') as writers:
     for i in range(len(name_list)):
         if i == len(name_list)-1:
@@ -34,15 +35,19 @@ img_tensor = img_tensor.unsqueeze(0).to('cuda')
 model = SegEarthSegmentation(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
-    model_type='SegEarth',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'NACLIP'
+    model_type='FCLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'NACLIP','SegEarth','FCLIP'
     ignore_residual=True,
-    isFusion=False,
+    #intermediate_fusion=False,
     feature_up=True,
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-    cls_token_lambda=-0.3,
-    feature_cls_token_lambda= 0,
+    cls_token_lambda= -0.3,
+    #lambda_global=3,
+    lambda_local=-0.007,
+    gaussian_std=7,
+    #ignore_residual=False,
+    intermediate_fusion=True,
     name_path='./configs/my_name.txt',
     prob_thd=0.1,
 )
@@ -57,4 +62,4 @@ ax[1].imshow(seg_pred, cmap='viridis')
 ax[1].axis('off')
 plt.tight_layout()
 # plt.show()
-plt.savefig('seg_pred_limit_orgin3', bbox_inches='tight')
+plt.savefig('seg_pred_limit_orgin4', bbox_inches='tight')

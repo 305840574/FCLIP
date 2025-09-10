@@ -74,7 +74,7 @@ def main():
                     'MODEL': cfg.model.model_type,
                     'Dataset': cfg.dataset_type,
                     'ClsTokenLambda':cfg.model.cls_token_lambda,
-                    'FeatureClsTokenLambda':cfg.model.feature_cls_token_lambda,
+                    'FeatureClsTokenLambda':cfg.model.lambda_global,
                     'ProbThd': cfg.model.prob_thd,
                     'Scale': cfg.test_pipeline[1]['scale'],
                     'function':"特征级融合+logits级融合"

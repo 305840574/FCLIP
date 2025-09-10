@@ -4,11 +4,15 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_vdd.txt',
     prob_thd=0.3,
-    feature_cls_token_lambda=0,
-    cls_token_lambda= -0.3,
-    lambda_local=-0.1,
-    gaussian_std=1,
-    model_type='SegEarth'
+    lambda_global=-1.1,
+    lambda_local=-0.18,
+    gaussian_std=0.9,
+    fusion_weight=-0.1,
+    #model_type='SegEarth',
+    #ignore_residual=False,
+    #cls_token_lambda=0,
+    #feature_up=False,
+    #intermediate_fusion=False
 )
 
 # dataset settings
@@ -69,7 +73,7 @@ val_dataloader = dict(
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(1000, 1000), keep_ratio=True),
+    dict(type='Resize', scale=(448, 448), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

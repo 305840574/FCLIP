@@ -5,11 +5,16 @@ model = dict(
     name_path='./configs/cls_udd5.txt',
     prob_thd=0.4,
     bg_idx=4,
-    feature_cls_token_lambda=-1.6,
-    cls_token_lambda=-0.38,
-    lambda_local=0.011,
-    gaussian_std=9,
-    #model_type='SegEarth'
+    lambda_global=-2,
+    lambda_local=0.007,
+    gaussian_std=5,
+    fusion_weight=-0.5,
+    model_type='MaskCLIP',
+    #attention_bias=True,
+    ignore_residual=False,
+    cls_token_lambda=0,
+    feature_up=False,
+    #intermediate_fusion=False
 )
 
 # dataset settings
@@ -71,7 +76,7 @@ val_dataloader = dict(
 #test_pipeline
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(990, 990), keep_ratio=True),
+    dict(type='Resize', scale=(448, 448), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

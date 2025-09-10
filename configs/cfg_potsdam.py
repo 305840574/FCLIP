@@ -5,7 +5,14 @@ model = dict(
     name_path='./configs/cls_potsdam.txt',
     prob_thd=0.1,
     bg_idx=5,
-    feature_cls_token_lambda=2
+    lambda_global=5,
+    cls_token_lambda= -0.5,
+    lambda_local=0.015,
+    gaussian_std=5,
+    fusion_weight=-0.1,
+    #ignore_residual=False,
+    #model_type='SegEarth',
+    #intermediate_fusion=True
 )
 
 # dataset settings

@@ -4,11 +4,15 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_uavid.txt',
     prob_thd=0.3,
-    feature_cls_token_lambda=2,
-    cls_token_lambda=-0.45,
-    lambda_local=0.02,
-    gaussian_std=5,
-    #model_type='SegEarth'
+    lambda_global=1,
+    lambda_local=0.01,
+    gaussian_std=7,
+    fusion_weight=0.3
+    #model_type='SCLIP',
+    #ignore_residual=False,
+    #cls_token_lambda=0,
+    #feature_up=False,
+    #intermediate_fusion=False
 )
 
 # dataset settings
@@ -17,7 +21,7 @@ data_root = ''
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(850, 850), keep_ratio=True),
+    dict(type='Resize', scale=(448, 448), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

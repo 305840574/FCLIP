@@ -267,11 +267,13 @@ class CLIP(nn.Module):
                      model_type,
                      ignore_residual: bool = False,
                      output_cls_token: bool = False,
-                     isFusion:bool = True,
+                     intermediate_fusion:bool = True,
+                     attention_bias:bool = False,
                      lambda_local:float = 0.01,
                      gaussian_std:float = 5.0,
+                     fusion_weight:float = -0.5,
                      normalize: bool = False):
-        features = self.visual(image, model_type, ignore_residual, output_cls_token,isFusion,lambda_local,gaussian_std)
+        features = self.visual(image, model_type, ignore_residual, output_cls_token,intermediate_fusion,attention_bias,lambda_local,gaussian_std,fusion_weight)
         if output_cls_token:
             cls_token, features = features
             return F.normalize(cls_token, dim=-1) if normalize else cls_token, \

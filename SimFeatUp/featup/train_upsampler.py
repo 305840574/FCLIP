@@ -150,7 +150,6 @@ class SimFeatUp(pl.LightningModule):
                 img, _ = batch
         
         
-        lr_feats = self.model(img)
         
         full_rec_loss = 0.0
         full_crf_loss = 0.0
@@ -161,6 +160,7 @@ class SimFeatUp(pl.LightningModule):
         total_loss = 0.0
         
         for i in range(self.n_jitters):
+            lr_feats = self.model(img)
             #使用 upsampler 生成高分辨率特征 hr_feats，若尺寸不匹配则进行双线性插值，匹配图像尺寸
             hr_feats = self.upsampler(lr_feats, img)
             if hr_feats.shape[2] != img.shape[2]:
@@ -222,12 +222,12 @@ class SimFeatUp(pl.LightningModule):
 
             loss = rec_loss + self.crf_weight * crf_loss + self.tv_weight * tv_loss - self.filter_ent_weight * entropy_loss \
                  + rec_img_loss * self.rec_img_weight
-            total_loss += loss
-            #full_total_loss += loss.item()
-            #self.manual_backward(loss)
-        full_total_loss = total_loss.item()
-        self.manual_backward(total_loss)
-        print(full_total_loss)
+            #total_loss += loss
+            full_total_loss += loss.item()
+            self.manual_backward(loss)
+        #full_total_loss = total_loss.item()
+        #self.manual_backward(total_loss)
+        #print(full_total_loss)
         self.avg.add("loss/crf", full_crf_loss)
         self.avg.add("loss/ent", full_entropy_loss)
         self.avg.add("loss/tv", full_tv_loss)
@@ -236,7 +236,7 @@ class SimFeatUp(pl.LightningModule):
         self.avg.add("loss/total", full_total_loss)
 
         #每1000轮保存一次权重
-        if self.global_step % 1000 == 0:
+        if self.global_step % 100 == 0:
             save_path = self.chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
             fusion_save_path = self.fusion_chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
             self.trainer.save_checkpoint(save_path)
@@ -450,7 +450,7 @@ def my_app(cfg: DictConfig) -> None:
         devices=cfg.num_gpus,
         max_epochs=cfg.epochs,
         logger=tb_logger,
-        val_check_interval=1000,
+        val_check_interval=100,
         log_every_n_steps=10,
         callbacks=callbacks,
         reload_dataloaders_every_n_epochs=1,

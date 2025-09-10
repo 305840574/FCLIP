@@ -272,39 +272,6 @@ class Transformer(nn.Module):
 
     def forward(self, x: torch.Tensor):
         return self.resblocks(x)
-class MultiScaleFusion(nn.Module):
-    def __init__(self, feature_dim):
-        super().__init__()
-        self.feat_dim = feature_dim
-        # 为每个中间层特征定义投影层
-        self.proj_intermediate = nn.ModuleList([nn.Linear(feature_dim, feature_dim).to(torch.float32) for _ in range(3)])  # 提取 3 层中间层投影
-        # 融合最后一层
-        self.proj_last = nn.Linear(feature_dim, feature_dim).to(torch.float32)  # 中间层经过投影后的最后一层特征投影
-        self.fusion_last = nn.Linear(feature_dim * 2, feature_dim).to(torch.float32)  # NACLIP 和 SegEarth 进行融合
-        self.fusion_layer = nn.Linear(feature_dim, feature_dim).to(torch.float32)  # NACLIP 和 SegEarth融合后的线性变换
-        self.norm1 = LayerNorm(self.feat_dim)
-        self.norm2 = LayerNorm(self.feat_dim)
-        self.normout=LayerNorm(self.feat_dim)
-    def forward(self, intermediate_feats, naclip_feat, feat):
-        naclip_feat=naclip_feat.to(torch.float32)
-        feat=feat.to(torch.float32)
-        intermediate_feats = [x.to(torch.float32) for x in intermediate_feats]
-        # 处理中间层特征
-        intermediate_fused = 0
-        for feat, proj in zip(intermediate_feats, self.proj_intermediate):
-            feat = proj(feat)  # 投影
-            intermediate_fused += feat
-        intermediate_fused=self.norm1(intermediate_fused)
-        intermediate_fused=self.proj_last(intermediate_fused)
-        # 融合最后一层
-        last_combined = torch.cat([naclip_feat, feat], dim=-1)
-        last_fused = self.fusion_last(last_combined)
-        last_fused=self.norm2(last_fused)
-        # 融合中间层和最后一层
-        fused = intermediate_fused + last_fused
-        fused = self.fusion_layer(fused)
-        fused=self.normout(fused)
-        return fused
 
 class VisionTransformer(nn.Module):
     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
@@ -326,7 +293,7 @@ class VisionTransformer(nn.Module):
         self.patch_size = patch_size
 
         #融合模块
-        #self.fusion=MultiScaleFusion(feature_dim=768).to(torch.float32)
+        self.fusion=MultiScaleAwareFusion(feature_dim=768).to(torch.float32)
 
     def forward(self, x: torch.Tensor, isfusion: bool = True ,patch_output: bool = False, last_n_layers: int = 1):
         _, _, w, h = x.shape
@@ -351,11 +318,12 @@ class VisionTransformer(nn.Module):
                         intermediate_feats.append(x)
                 blk=self.transformer.resblocks[-last_n_layers]
                 naclip_x=x
-                segearth_output = 0
+                #segearth_output = 0
                 naclip_output=0
-                segearth_output += self.custom_attn(blk.attn, blk.ln_1(x), model_type='SegEarth')
+                #segearth_output += self.custom_attn(blk.attn, blk.ln_1(x), model_type='SegEarth')
                 naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
-                x=self.fusion(intermediate_feats,naclip_output,segearth_output)
+                intermediate_feats.append(naclip_output)
+                x=self.fusion(intermediate_feats)
             else :
                 *layers, last_resblock = self.transformer.resblocks
                 penultimate = nn.Sequential(*layers)
@@ -445,7 +413,7 @@ class VisionTransformer(nn.Module):
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
             
-            lambda_local=1
+            lambda_local=0.01
             attn_weights = attn_weights + omega*lambda_local
             
             #attn_weights+=omega
@@ -562,8 +530,8 @@ class CLIP(nn.Module):
 
     def get_patch_encodings(self, image, isfusion) -> torch.Tensor:
         """ Get the encodings for each patch in the image """
-        #return self.visual(image.to(torch.float32),isfusion, patch_output=True,) 浮点
-        return self.visual(image.type(self.dtype),isfusion, patch_output=True,)
+        return self.visual(image.to(torch.float32),isfusion, patch_output=True,)
+        #return self.visual(image.type(self.dtype),isfusion, patch_output=True,)
         '''
         if isfusion:
             return self.visual(image.to(torch.float32),isfusion, patch_output=True,)

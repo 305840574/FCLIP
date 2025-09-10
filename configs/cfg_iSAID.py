@@ -4,6 +4,11 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_iSAID.txt',
     prob_thd=0.4,
+    #lambda_global=-1.6,
+    cls_token_lambda=-0.3,
+    lambda_local=0.01,
+    gaussian_std=3,
+    model_type='SegEarth',
 )
 
 # dataset settings
@@ -12,7 +17,7 @@ data_root = ''
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
+    dict(type='Resize', scale=(660, 660), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),
@@ -20,7 +25,7 @@ test_pipeline = [
 ]
 
 test_dataloader = dict(
-    batch_size=8,
+    batch_size=6,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),

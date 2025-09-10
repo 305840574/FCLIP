@@ -5,10 +5,16 @@ model = dict(
     name_path='./configs/cls_vaihingen.txt',
     prob_thd=0.1,
     bg_idx=5,
-    cls_token_lambda= -0.23,
-    feature_cls_token_lambda=3,
-    ignore_residual=False,
+    #lambda_global=3,
+    lambda_local=-0.007,
+    gaussian_std=9,
+    fusion_weight=-0.4,
+    #ignore_residual=False,
+    #attention_bias=True,
     model_type='SegEarth',
+    cls_token_lambda=-0.1,
+    #feature_up=False,
+    intermediate_fusion=False
 )
 
 # dataset settings
@@ -17,7 +23,7 @@ data_root = ''
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(660, 660), keep_ratio=True),
+    dict(type='Resize', scale=(448, 448), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),
