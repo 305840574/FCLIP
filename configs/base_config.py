@@ -11,16 +11,10 @@ model = dict(
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-        #model_path='/root/autodl-tmp/zdj-SegEarth-OV/work_dirs/simfeatup_million_aid/checkpoints/jbu_one/xclip_jbu_one_million_aid_attention_crf_0_tv_0.0_ent_0.0_5200.ckpt'),
     cls_token_lambda= -0.3,
-    lambda_global= 0,
-    lambda_local=0.01,
-    gaussian_std=5,
-    fusion_weight=0,
 )
 
 # 评估器
-
 test_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
 
 default_scope = 'mmseg'
@@ -38,24 +32,11 @@ load_from = None
 resume = False
 
 test_cfg = dict(type='TestLoop')
-log_level = 'DEBUG'
 
 default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1, log_metric_by_epoch=False),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook',
-        interval=1000,
-        save_best='mIoU',
-        rule='greater'),
+    checkpoint=dict(type='CheckpointHook', by_epoch=False, interval=2000),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook', interval=1))
-
-custom_hooks = [
-    dict(
-        type='SaveTrainableModulesHook',
-        interval=1,  # 每 5 轮触发
-        metric_key='mIoU',  # 验证指标名称
-        rule='greater',     # 越大越好
-    )
-]

@@ -4,12 +4,11 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_iSAID.txt',
     prob_thd=0.4,
-    #lambda_global=-1.6,
-    cls_token_lambda=-0.3,
-    lambda_local=0.01,
-    gaussian_std=3,
-    model_type='SegEarth',
-)
+    lambda_global=-1.5,
+    lambda_local=0.02,
+    gaussian_std=2,
+    fusion_weight=-0.4,
+)   
 
 # dataset settings
 dataset_type = 'iSAIDDataset'
@@ -25,7 +24,7 @@ test_pipeline = [
 ]
 
 test_dataloader = dict(
-    batch_size=6,
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),

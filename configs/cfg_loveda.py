@@ -5,12 +5,10 @@ model = dict(
     name_path='./configs/cls_loveda.txt',
     prob_thd=0.3,
     lambda_global=-1,
-    cls_token_lambda=-0.3,
-    lambda_local=0.01,
+    cls_token_lambda=-0.5,
+    lambda_local=0.02,
     gaussian_std=3,
-    fusion_weight=-0.5,
-    #model_type='SegEarth',
-    #intermediate_fusion=True,
+    fusion_weight=-0.2,
 )
 
 # dataset settings

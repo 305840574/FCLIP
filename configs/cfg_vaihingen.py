@@ -5,16 +5,10 @@ model = dict(
     name_path='./configs/cls_vaihingen.txt',
     prob_thd=0.1,
     bg_idx=5,
-    #lambda_global=3,
+    lambda_global=3.5,
     lambda_local=-0.007,
-    gaussian_std=9,
+    gaussian_std=10,
     fusion_weight=-0.4,
-    #ignore_residual=False,
-    #attention_bias=True,
-    model_type='SegEarth',
-    cls_token_lambda=-0.1,
-    #feature_up=False,
-    intermediate_fusion=False
 )
 
 # dataset settings
