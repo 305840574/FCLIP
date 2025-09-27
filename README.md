@@ -19,7 +19,7 @@
     <a href="https://www.tsinghua.edu.cn/">Tsinghua University</a><sup>3</sup>
 
 <p align="center">
-    <img src="asserts/architecture.jpg">
+    <img src="asserts/Structure_Figure.png">
 </p>
 
 ## Abstract
@@ -215,4 +215,5 @@ python eval_all.py
 
 
 ## Acknowledgement
+
 
