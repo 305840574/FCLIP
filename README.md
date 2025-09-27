@@ -214,5 +214,10 @@ python eval_all.py
     <img src="asserts/Result.png">
 </p>
 
+
+## Segmentation Visualization
+<p align="center">
+    <img src="asserts/Effect_Figure.png">
+</p>
 ## Acknowledgement
 
