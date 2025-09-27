@@ -202,7 +202,7 @@ python demo.py
 
 ## Model evaluation
 ```
-python eval.py --config ./configs/cfg_DATASET.py --workdir YOUR_WORK_DIR
+python eval.py --config ./configs/cfg_dataset.py
 ```
 Evaluation on all datasets:
 ```
@@ -220,4 +220,5 @@ python eval_all.py
     <img src="asserts/Effect_Figure.png">
 </p>
 ## Acknowledgement
+
 
