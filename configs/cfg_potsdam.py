@@ -7,9 +7,9 @@ model = dict(
     bg_idx=5,
     lambda_global=5,
     cls_token_lambda= -0.5,
-    lambda_local=-0.02,
+    lambda_local=0.02,
     gaussian_std=5,
-    fusion_weight=-0.2,
+    fusion_weight=-0.1,
 )
 
 # dataset settings

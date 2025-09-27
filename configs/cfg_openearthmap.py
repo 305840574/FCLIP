@@ -4,10 +4,10 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_openearthmap.txt',
     prob_thd=0.1,
-    lambda_global=-1.6,
-    lambda_local=0.007,
+    lambda_global=0,
+    lambda_local=0,
     gaussian_std=5,
-    fusion_weight=-0.5,
+    fusion_weight=-0,
 )
 
 # dataset settings

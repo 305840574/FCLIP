@@ -1,274 +1,128 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+import glob
+import numpy as np
+from PIL import Image
+from collections import Counter
+
+mask = np.array(Image.open("/root/autodl-tmp/zdj-SegEarth-OV/data/UAVid/ann_dir/test/seq16_000000_0_1080_0_1280.png"))
+print(np.unique(mask))
+
 import argparse
 import glob
-import os
 import os.path as osp
-import shutil
-import tempfile
-import zipfile
-
-import mmcv
 import numpy as np
-from mmengine.utils import ProgressBar, mkdir_or_exist
 from PIL import Image
+import mmcv
 
-iSAID_palette = \
-    {
-        0: (0, 0, 0),
-        1: (0, 0, 63),
-        2: (0, 63, 63),
-        3: (0, 63, 0),
-        4: (0, 63, 127),
-        5: (0, 63, 191),
-        6: (0, 63, 255),
-        7: (0, 127, 63),
-        8: (0, 127, 127),
-        9: (0, 0, 127),
-        10: (0, 0, 191),
-        11: (0, 0, 255),
-        12: (0, 191, 127),
-        13: (0, 127, 191),
-        14: (0, 127, 255),
-        15: (0, 100, 155)
-    }
+# iSAID调色板
+iSAID_palette = {
+    0: (0, 0, 0), 1: (0, 0, 63), 2: (0, 63, 63), 3: (0, 63, 0),
+    4: (0, 63, 127), 5: (0, 63, 191), 6: (0, 63, 255), 7: (0, 127, 63),
+    8: (0, 127, 127), 9: (0, 0, 127), 10: (0, 0, 191), 11: (0, 0, 255),
+    12: (0, 191, 127), 13: (0, 127, 191), 14: (0, 127, 255), 15: (0, 100, 155)
+}
 
-iSAID_invert_palette = {v: k for k, v in iSAID_palette.items()}
+# 将调色板转换为NumPy数组以便高效比较
+PALETTE_COLORS = np.array(list(iSAID_palette.values()))
+PALETTE_INDICES = np.array(list(iSAID_palette.keys()))
 
+def verify_label_image(image_path):
+    """
+    验证单张iSAID标签图像的颜色值。
+    """
+    if not osp.exists(image_path):
+        print(f"Error: Image file not found at {image_path}")
+        return
 
-def iSAID_convert_from_color(arr_3d, palette=iSAID_invert_palette):
-    """RGB-color encoding to grayscale labels."""
-    arr_2d = np.zeros((arr_3d.shape[0], arr_3d.shape[1]), dtype=np.uint8)
+    print(f"\n--- Verifying: {osp.basename(image_path)} ---")
+
+    # 方法1: 使用 PIL (Image.open)
+    try:
+        pil_img = Image.open(image_path).convert('RGB')
+        pil_arr = np.array(pil_img)
+        print("  - Loaded with PIL (Image.open)")
+        verify_colors(pil_arr)
+    except Exception as e:
+        print(f"  - Error loading with PIL: {e}")
+
+    print("-" * 20)
+
+    # 方法2: 使用 mmcv.imread
+    try:
+        mmcv_arr = mmcv.imread(image_path, channel_order='rgb')
+        print("  - Loaded with mmcv.imread")
+        verify_colors(mmcv_arr)
+    except Exception as e:
+        print(f"  - Error loading with mmcv: {e}")
+
+def verify_colors(image_array):
+    """
+    核心函数：比较图像中的颜色与iSAID调色板。
+    """
+    if image_array is None:
+        return
+
+    # 获取图像中的所有唯一颜色
+    unique_colors = np.unique(image_array.reshape(-1, 3), axis=0)
+
+    print(f"    - Found {len(unique_colors)} unique colors.")
+    print("    - Checking for colors not in iSAID_palette...")
+
+    unmatched_colors = []
+    num_unmatched_pixels = 0
+    total_pixels = image_array.shape[0] * image_array.shape[1]
+
+    # 遍历图像中的所有像素，检查是否与调色板完全匹配
+    arr_2d = np.zeros(image_array.shape[:2], dtype=np.uint8)
+    matched_pixels_count = 0
+    for color in unique_colors:
+        # 使用np.any和np.all来检查颜色是否在调色板中
+        is_in_palette = np.any(np.all(PALETTE_COLORS == color, axis=1))
+        
+        if not is_in_palette:
+            unmatched_colors.append(color)
+            
+            # 计算不匹配的像素数量
+            m = np.all(image_array == color, axis=2)
+            num_unmatched_pixels += np.sum(m)
+        else:
+            m = np.all(image_array == color, axis=2)
+            matched_pixels_count += np.sum(m)
     
-    for c, i in palette.items():
-        m = np.all(arr_3d == np.array(c).reshape(1, 1, 3), axis=2)
-        arr_2d[m] = i
-
-    return arr_2d
-def iSAID_convert_from_color_robust(arr_3d, palette=iSAID_invert_palette):
-    """RGB-color encoding to grayscale labels with distance-based matching."""
-    arr_2d = np.zeros((arr_3d.shape[0], arr_3d.shape[1]), dtype=np.uint8)
+    print(f"    - Total pixels: {total_pixels}")
+    print(f"    - Pixels with colors from the palette: {matched_pixels_count}")
+    print(f"    - **Pixels with colors NOT in the palette**: {num_unmatched_pixels}")
     
-    # 将调色板转换为 NumPy 数组以便高效计算
-    palette_colors = np.array(list(palette.keys()))  # RGB colors
-    palette_indices = np.array(list(palette.values())) # Class IDs
-
-    # 遍历图像中的每个像素
-    for y in range(arr_3d.shape[0]):
-        for x in range(arr_3d.shape[1]):
-            pixel_color = arr_3d[y, x, :]
-            
-            # 计算当前像素与所有调色板颜色的欧氏距离
-            distances = np.sqrt(np.sum((palette_colors - pixel_color)**2, axis=1))
-            
-            # 找到距离最近的调色板颜色索引
-            min_dist_index = np.argmin(distances)
-            
-            # 将像素分配给最近的类别
-            arr_2d[y, x] = palette_indices[min_dist_index]
-
-    return arr_2d
-
-def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
-    img = np.asarray(Image.open(src_path).convert('RGB'))
-
-    img_H, img_W, _ = img.shape
-
-    if img_H < patch_H and img_W > patch_W:
-
-        img = mmcv.impad(img, shape=(patch_H, img_W), pad_val=0)
-
-        img_H, img_W, _ = img.shape
-
-    elif img_H > patch_H and img_W < patch_W:
-
-        img = mmcv.impad(img, shape=(img_H, patch_W), pad_val=0)
-
-        img_H, img_W, _ = img.shape
-
-    elif img_H < patch_H and img_W < patch_W:
-
-        img = mmcv.impad(img, shape=(patch_H, patch_W), pad_val=0)
-
-        img_H, img_W, _ = img.shape
-
-    for x in range(0, img_W, patch_W - overlap):
-        for y in range(0, img_H, patch_H - overlap):
-            x_str = x
-            x_end = x + patch_W
-            if x_end > img_W:
-                diff_x = x_end - img_W
-                x_str -= diff_x
-                x_end = img_W
-            y_str = y
-            y_end = y + patch_H
-            if y_end > img_H:
-                diff_y = y_end - img_H
-                y_str -= diff_y
-                y_end = img_H
-
-            img_patch = img[y_str:y_end, x_str:x_end, :]
-            img_patch = Image.fromarray(img_patch.astype(np.uint8))
-            image = osp.basename(src_path).split('.')[0] + '_' + str(
-                y_str) + '_' + str(y_end) + '_' + str(x_str) + '_' + str(
-                    x_end) + '.png'
-            # print(image)
-            save_path_image = osp.join(out_dir, 'img_dir', mode, str(image))
-            img_patch.save(save_path_image, format='BMP')
-
-
-def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
-    label = mmcv.imread(src_path, channel_order='rgb')
-    label = iSAID_convert_from_color(label)
-    img_H, img_W = label.shape
-
-    if img_H < patch_H and img_W > patch_W:
-
-        label = mmcv.impad(label, shape=(patch_H, img_W), pad_val=255)
-
-        img_H = patch_H
-
-    elif img_H > patch_H and img_W < patch_W:
-
-        label = mmcv.impad(label, shape=(img_H, patch_W), pad_val=255)
-
-        img_W = patch_W
-
-    elif img_H < patch_H and img_W < patch_W:
-
-        label = mmcv.impad(label, shape=(patch_H, patch_W), pad_val=255)
-
-        img_H = patch_H
-        img_W = patch_W
-
-    # 构建一个完整的调色板，包含256个条目，以备Pillow使用
-    full_palette = [0] * 256 * 3
-    for idx, rgb in iSAID_palette.items():
-        full_palette[idx * 3] = rgb[0]
-        full_palette[idx * 3 + 1] = rgb[1]
-        full_palette[idx * 3 + 2] = rgb[2]
-    # pad_val=255 的情况
-    full_palette[255 * 3] = 255
-    full_palette[255 * 3 + 1] = 255
-    full_palette[255 * 3 + 2] = 255
-
-    for x in range(0, img_W, patch_W - overlap):
-        for y in range(0, img_H, patch_H - overlap):
-            x_str = x
-            x_end = x + patch_W
-            if x_end > img_W:
-                diff_x = x_end - img_W
-                x_str -= diff_x
-                x_end = img_W
-            y_str = y
-            y_end = y + patch_H
-            if y_end > img_H:
-                diff_y = y_end - img_H
-                y_str -= diff_y
-                y_end = img_H
-
-            lab_patch = label[y_str:y_end, x_str:x_end]
-            lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
-            
-            # 使用手动创建的调色板
-            lab_patch.putpalette(full_palette)
-            
-            image = osp.basename(src_path).split('.')[0].split(
-                '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
-                    x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
-            lab_patch.save(osp.join(out_dir, 'ann_dir', mode, str(image)))
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Convert iSAID dataset to mmsegmentation format')
-    parser.add_argument('dataset_path', help='iSAID folder path')
-    parser.add_argument('--tmp_dir', help='path of the temporary directory')
-    parser.add_argument('-o', '--out_dir', help='output path')
-
-    parser.add_argument(
-        '--patch_width',
-        default=896,
-        type=int,
-        help='Width of the cropped image patch')
-    parser.add_argument(
-        '--patch_height',
-        default=896,
-        type=int,
-        help='Height of the cropped image patch')
-    parser.add_argument(
-        '--overlap_area', default=384, type=int, help='Overlap area')
-    args = parser.parse_args()
-    return args
-
+    if unmatched_colors:
+        print("    - The following colors do not match any entry in iSAID_palette:")
+        for color in unmatched_colors:
+            print(f"      -> {color}")
+        print("\n    Summary: The presence of unmatched colors and pixels confirms that "
+              "a direct, strict RGB-to-index mapping (like in your original code) "
+              "will fail to classify these pixels, leaving them as the default value (0).")
+    else:
+        print("    - All colors in this image are present in the iSAID_palette. "
+              "This suggests the image might not have anti-aliasing artifacts or has been "
+              "processed to remove them.")
 
 def main():
-    args = parse_args()
-    dataset_path = args.dataset_path
-    # image patch width and height
-    patch_H, patch_W = args.patch_width, args.patch_height
+    parser = argparse.ArgumentParser(description="Verify colors in iSAID label images.")
+    parser.add_argument('label_path', help="Path to a single label image or a folder containing them.")
+    args = parser.parse_args()
 
-    overlap = args.overlap_area  # overlap area
-
-    if args.out_dir is None:
-        out_dir = osp.join('data', 'iSAID')
+    label_path = args.label_path
+    
+    if osp.isdir(label_path):
+        print(f"Searching for .png files in folder: {label_path}")
+        image_files = glob.glob(osp.join(label_path, '*.png'))
+        if not image_files:
+            print("No .png files found.")
+            return
+        
+        for img_file in image_files:
+            verify_label_image(img_file)
     else:
-        out_dir = args.out_dir
-
-    print('Making directories...')
-    mkdir_or_exist(osp.join(out_dir, 'img_dir', 'val'))
-
-    mkdir_or_exist(osp.join(out_dir, 'ann_dir', 'val'))
-
-    assert os.path.exists(os.path.join(dataset_path, 'val')), \
-        f'val is not in {dataset_path}'
-
-    with tempfile.TemporaryDirectory(dir=args.tmp_dir) as tmp_dir:
-        for dataset_mode in ['val']:
-
-            # for dataset_mode in [ 'test']:
-            print(f'Extracting  {dataset_mode}ing.zip...')
-            img_zipp_list = glob.glob(
-                os.path.join(dataset_path, dataset_mode, 'images', '*.zip'))
-            print('Find the data', img_zipp_list)
-            for img_zipp in img_zipp_list:
-                zip_file = zipfile.ZipFile(img_zipp)
-                zip_file.extractall(os.path.join(tmp_dir, dataset_mode, 'img'))
-            src_path_list = glob.glob(
-                os.path.join(tmp_dir, dataset_mode, 'img', 'images', '*.png'))
-
-            src_prog_bar = ProgressBar(len(src_path_list))
-            for i, img_path in enumerate(src_path_list):
-                if dataset_mode != 'test':
-                    slide_crop_image(img_path, out_dir, dataset_mode, patch_H,
-                                     patch_W, overlap)
-
-                else:
-                    shutil.move(img_path,
-                                os.path.join(out_dir, 'img_dir', dataset_mode))
-                src_prog_bar.update()
-
-            if dataset_mode != 'test':
-                label_zipp_list = glob.glob(
-                    os.path.join(dataset_path, dataset_mode, 'Semantic_masks',
-                                 '*.zip'))
-                for label_zipp in label_zipp_list:
-                    zip_file = zipfile.ZipFile(label_zipp)
-                    zip_file.extractall(
-                        os.path.join(tmp_dir, dataset_mode, 'lab'))
-
-                lab_path_list = glob.glob(
-                    os.path.join(tmp_dir, dataset_mode, 'lab', 'images',
-                                 '*.png'))
-                lab_prog_bar = ProgressBar(len(lab_path_list))
-                for i, lab_path in enumerate(lab_path_list):
-                    slide_crop_label(lab_path, out_dir, dataset_mode, patch_H,
-                                     patch_W, overlap)
-                    lab_prog_bar.update()
-
-        print('Removing the temporary files...')
-
-    print('Done!')
-
+        verify_label_image(label_path)
 
 if __name__ == '__main__':
     main()
+

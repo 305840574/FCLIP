@@ -212,7 +212,7 @@ class SegEarthSegmentation(BaseSegmentor):
             image_features = self.net.visual(img)
         else:
             image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token,self.intermediate_fusion,self.attention_bias,self.lambda_local,self.gaussian_std,self.fusion_weight)
-        print("output_cls_token:",self.output_cls_token)
+        
         if self.output_cls_token:
             image_cls_token, image_features = image_features
             image_cls_token_time=image_cls_token
