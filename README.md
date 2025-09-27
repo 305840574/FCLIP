@@ -1,5 +1,3 @@
-<div align="center">
-
 <h1>FCLIP: CLIP-Driven Multi-Level Fusion for Training-Tree Zero-Shot Semantic Segmentation in Remote Sensing Images.</h1>
 
 <p align="center">
@@ -215,5 +213,6 @@ python eval_all.py
 
 
 ## Acknowledgement
+
 
 
