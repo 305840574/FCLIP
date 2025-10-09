@@ -4,11 +4,11 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_loveda.txt',
     prob_thd=0.3,
-    lambda_global=0,
-    #cls_token_lambda=-0.5,
-    lambda_local=0,
+    lambda_global=-1,
+    cls_token_lambda=-0.5,
+    lambda_local=0.02,
     gaussian_std=3,
-    fusion_weight=0,
+    fusion_weight=-0.2,
 )
 
 # dataset settings
