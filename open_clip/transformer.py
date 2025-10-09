@@ -523,8 +523,8 @@ class VisionTransformer(nn.Module):
         x = self.patch_dropout(x)
         x = self.ln_pre(x)
 
-        x = x.permute(1, 0, 2)  # NLD -> LND (N:batch_size,L:token 数,D:feature_dim特征维度)
-        # 提取中间层特征
+        x = x.permute(1, 0, 2)  # NLD -> LND
+     
         fusion_feat=0
         for index, blk in enumerate(self.transformer.resblocks[:-last_n_layers]):
             x = blk(x)
@@ -703,7 +703,7 @@ class VisionTransformer(nn.Module):
             omega = addition.clone()
 
             if model_type == 'NACLIP':
-                attn_weights = torch.bmm(k, k.transpose(1, 2)) * scale #k-k注意力
+                attn_weights = torch.bmm(k, k.transpose(1, 2)) * scale 
                 
             elif model_type == 'NOnly':
                 attn_weights = torch.zeros((num_heads, num_tokens, num_tokens)).to(x.dtype).to(x.device)

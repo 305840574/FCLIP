@@ -1,14 +1,12 @@
 from collections import OrderedDict
-from typing import Callable, Optional, Sequence, Tuple , Union
-import math
+from typing import Tuple, Union
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from .interpolate import interpolate_positional_embedding
-from torch.utils.checkpoint import checkpoint
-
 
 
 class Bottleneck(nn.Module):
@@ -273,6 +271,7 @@ class Transformer(nn.Module):
     def forward(self, x: torch.Tensor):
         return self.resblocks(x)
 
+
 class VisionTransformer(nn.Module):
     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
         super().__init__()
@@ -292,10 +291,7 @@ class VisionTransformer(nn.Module):
 
         self.patch_size = patch_size
 
-        #融合模块
-        self.fusion=MultiScaleAwareFusion(feature_dim=768).to(torch.float32)
-
-    def forward(self, x: torch.Tensor, isfusion: bool = True ,patch_output: bool = False, last_n_layers: int = 1):
+    def forward(self, x: torch.Tensor, patch_output: bool = False):
         _, _, w, h = x.shape
 
         x = self.conv1(x)  # shape = [*, width, grid, grid]
@@ -308,29 +304,11 @@ class VisionTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
 
         if patch_output:
+            *layers, last_resblock = self.transformer.resblocks
+            penultimate = nn.Sequential(*layers)
 
-            if isfusion:
-                # 提取中间层特征
-                intermediate_feats = []
-                for i, blk in enumerate(self.transformer.resblocks[:-last_n_layers]):
-                    x = blk(x)
-                    if i in [2, 5, 8]:
-                        intermediate_feats.append(x)
-                blk=self.transformer.resblocks[-last_n_layers]
-                naclip_x=x
-                #segearth_output = 0
-                naclip_output=0
-                #segearth_output += self.custom_attn(blk.attn, blk.ln_1(x), model_type='SegEarth')
-                naclip_output+=self.custom_attn(blk.attn, blk.ln_1(naclip_x), model_type = 'NACLIP')
-                intermediate_feats.append(naclip_output)
-                x=self.fusion(intermediate_feats)
-            else :
-                *layers, last_resblock = self.transformer.resblocks
-                penultimate = nn.Sequential(*layers)
-
-                x = penultimate(x)
-                x = last_resblock.forward_x(x)
-                
+            x = penultimate(x)
+            x = last_resblock.forward_x(x)
             x = x.permute(1, 0, 2)  # LND -> NLD
 
             # Extract the patch tokens, not the class token
@@ -350,82 +328,6 @@ class VisionTransformer(nn.Module):
             x = x @ self.proj
 
         return x
-
-    @staticmethod
-    def gaussian_window(dim1, dim2, std=1.):
-        constant = 1 / (std * math.sqrt(2))
-        ks = list()
-        for dim in [dim1, dim2]:
-            start = -(dim - 1) / 2.0
-            k = torch.linspace(start=start * constant,
-                               end=(start + (dim - 1)) * constant,
-                               steps=dim,
-                               dtype=torch.float)
-            ks.append(k)
-        dist_square_to_mu = (torch.stack(torch.meshgrid(*ks, indexing='ij')) ** 2).sum(0)
-        return torch.exp(-dist_square_to_mu)
-
-    @staticmethod
-    def get_attention_addition(dim1, dim2, window, adjust_for_cls=True):
-        m = torch.einsum('ij,kl->ijkl', torch.eye(dim1), torch.eye(dim2))
-        m = m.permute((0, 3, 1, 2)).contiguous()  # m[ijkl] = 1 iff (i, j) == (k, l)
-        out = F.conv2d(m.view(-1, dim1, dim2).unsqueeze(1), window.unsqueeze(0).unsqueeze(1), padding='same').squeeze(1)
-        out = out.view(dim1 * dim2, dim1 * dim2)
-        if adjust_for_cls:
-            v_adjusted = torch.vstack([torch.zeros((1, dim1 * dim2)), out])
-            out = torch.hstack([torch.zeros((dim1 * dim2 + 1, 1)), v_adjusted])
-        return out
-
-    def custom_attn(self, attn_layer, x, model_type):
-
-        num_heads = attn_layer.num_heads
-        num_tokens, bsz, embed_dim = x.size()
-        head_dim = embed_dim // num_heads
-        scale = head_dim ** -0.5
-
-        q, k, v = F.linear(x, attn_layer.in_proj_weight, attn_layer.in_proj_bias).chunk(3, dim=-1)
-        q = q.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
-        k = k.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
-        v = v.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
-
-        if  model_type == 'SegEarth':
-            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
-            attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
-        elif model_type == 'NACLIP' :
-            self.gaussian_std = 5.0
-            self.addition_cache = dict()
-            n_patches = (int(np.sqrt((num_tokens - 1))), int(np.sqrt((num_tokens - 1))))
-            addition = self.addition_cache.get(n_patches)
-            if addition is None:
-                window_size = [side * 2 - 1 for side in n_patches]
-                #window_size=n_patches
-                window = VisionTransformer.gaussian_window(*window_size, std=self.gaussian_std)
-                addition = VisionTransformer.get_attention_addition(*n_patches, window).unsqueeze(0).to(x.dtype).to(x.device)
-                self.addition_cache[n_patches] = addition
-            omega = addition.clone()
-
-            #attn_weights = torch.bmm(k, k.transpose(1, 2)) * scale #k-k注意力
-                
-            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
-            attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
-            
-            lambda_local=0.01
-            attn_weights = attn_weights + omega*lambda_local
-            
-            #attn_weights+=omega
-            #当使用Q-Q，K-K，V-V注意力+高斯核时，不需要softmax
-            if model_type != 'NACLIP':
-                attn_weights = F.softmax(attn_weights, dim=-1)
-
-        attn_output = torch.bmm(attn_weights, v)
-        attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
-        attn_output = attn_layer.out_proj(attn_output)
-
-        return attn_output
 
 
 class CLIP(nn.Module):
@@ -528,17 +430,9 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def get_patch_encodings(self, image, isfusion) -> torch.Tensor:
+    def get_patch_encodings(self, image) -> torch.Tensor:
         """ Get the encodings for each patch in the image """
-        return self.visual(image.to(torch.float32),isfusion, patch_output=True,)
-        #return self.visual(image.type(self.dtype),isfusion, patch_output=True,)
-        '''
-        if isfusion:
-            return self.visual(image.to(torch.float32),isfusion, patch_output=True,)
-        else :
-            return self.visual(image,isfusion, patch_output=True,)
-        '''
-
+        return self.visual(image.type(self.dtype), patch_output=True)
 
     def get_image_encoder_projection(self) -> nn.Parameter:
         """ Get vision transformer projection matrix."""
@@ -637,5 +531,5 @@ def build_model(state_dict: dict):
             del state_dict[key]
 
     convert_weights(model)
-    model.load_state_dict(state_dict,strict=False)
+    model.load_state_dict(state_dict)
     return model.eval()

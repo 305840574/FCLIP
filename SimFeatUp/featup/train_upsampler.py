@@ -64,7 +64,6 @@ class SimFeatUp(pl.LightningModule):
                  upsampler,
                  downsampler,
                  chkpt_dir,
-                 fusion_chkpt_dir,
                  ):
         super().__init__()
         self.model_type = model_type
@@ -82,21 +81,13 @@ class SimFeatUp(pl.LightningModule):
         self.tv_weight = tv_weight
         self.rec_img_weight = rec_img_weight
         self.chkpt_dir = chkpt_dir
-        self.fusion_chkpt_dir=fusion_chkpt_dir
 
-        self.model, self.patch_size, self.dim = get_featurizer(model_type, activation_type, isfusion=True, num_classes=1000)
-        self.clip_model, _ , _ =get_featurizer(model_type, activation_type, isfusion=False, num_classes=1000)
-        self.model=self.model.to(torch.float32)
-        self.clip_model=self.clip_model.to(torch.float32)
-        #冻结self.model参数
-        for name, param in self.model.named_parameters():
-            if 'fusion' not in name:
-                param.requires_grad = False
-        for name, param in self.clip_model.named_parameters():
-            param.requires_grad = False
+        self.model, self.patch_size, self.dim = get_featurizer(model_type, activation_type, num_classes=1000)
+        for p in self.model.parameters():
+            p.requires_grad = False
         # self.model = torch.nn.Sequential(self.model, ChannelNorm(self.dim))
         self.upsampler = get_upsampler(upsampler, self.dim)
-        
+
         if downsampler == 'simple':
             self.downsampler = SimpleDownsampler(self.kernel_size, self.final_size)
         elif downsampler == 'attention':
@@ -148,21 +139,17 @@ class SimFeatUp(pl.LightningModule):
                 img = batch['img']
             else:
                 img, _ = batch
-        
-        
-        
+            lr_feats = self.model(img)
+
         full_rec_loss = 0.0
         full_crf_loss = 0.0
         full_entropy_loss = 0.0
         full_tv_loss = 0.0
         full_total_loss = 0.0
         full_rec_img_loss = 0.0
-        total_loss = 0.0
-        
         for i in range(self.n_jitters):
-            lr_feats = self.model(img)
-            #使用 upsampler 生成高分辨率特征 hr_feats，若尺寸不匹配则进行双线性插值，匹配图像尺寸
             hr_feats = self.upsampler(lr_feats, img)
+
             if hr_feats.shape[2] != img.shape[2]:
                 hr_feats = torch.nn.functional.interpolate(hr_feats, img.shape[2:], mode="bilinear")
 
@@ -170,9 +157,8 @@ class SimFeatUp(pl.LightningModule):
                 transform_params = sample_transform(
                     True, self.max_pad, self.max_zoom, img.shape[2], img.shape[3])
                 jit_img = apply_jitter(img, self.max_pad, transform_params)
-                #lr_jit_feats = self.model(jit_img)
-                lr_jit_feats = self.clip_model(jit_img) #用原始CLIP提取特征作为ground_truth
-            #随机投影矩阵 proj 用于将高维特征（例如 lr_feats 的通道数）投影到较低维空间（self.random_projection 指定的维度）。
+                lr_jit_feats = self.model(jit_img)
+
             if self.random_projection is not None:
                 proj = torch.randn(lr_feats.shape[0],
                                    lr_feats.shape[1],
@@ -181,12 +167,10 @@ class SimFeatUp(pl.LightningModule):
             else:
                 proj = None
 
-            hr_jit_feats = apply_jitter(hr_feats, self.max_pad, transform_params)#对 hr_feats 应用相同抖动
-            # Johnson–Lindenstrauss lemma：Johnson-Lindenstrauss 引理 (JL 引理): 这是一个数学定理，
-            # 指出可以将高维数据投影到低维空间中，同时保证点之间的欧几里得距离（或相似性）以高概率近似保持不变。
-            proj_hr_feats = self.project(hr_jit_feats, proj) 
+            hr_jit_feats = apply_jitter(hr_feats, self.max_pad, transform_params)
+            proj_hr_feats = self.project(hr_jit_feats, proj) # Johnson–Lindenstrauss lemma
 
-            down_jit_feats = self.project(self.downsampler(hr_jit_feats, jit_img), proj)#使用 downsampler 下采样 hr_jit_feats，再应用投影
+            down_jit_feats = self.project(self.downsampler(hr_jit_feats, jit_img), proj)
 
             if self.predicted_uncertainty:
                 scales = self.scale_net(lr_jit_feats)
@@ -197,23 +181,23 @@ class SimFeatUp(pl.LightningModule):
                 rec_loss = (self.project(lr_jit_feats, proj) - down_jit_feats).square().mean() / self.n_jitters
 
             full_rec_loss += rec_loss.item()
-            #图像重构损失 (rec_img_loss)
+
             rec_img = self.projection_img(hr_jit_feats)
             rec_img_loss = (jit_img - rec_img).square().mean() / self.n_jitters
             full_rec_img_loss += rec_img_loss.item()
-            #使用条件随机场（CRF）平滑特征图，仅在 i == 0计算。默认不处理
+
             if self.crf_weight > 0 and i == 0:
                 crf_loss = self.crf(img, proj_hr_feats)
                 full_crf_loss += crf_loss.item()
             else:
                 crf_loss = 0.0
-            #默认不处理
+
             if self.filter_ent_weight > 0.0:
                 entropy_loss = entropy(self.downsampler.get_kernel())
                 full_entropy_loss += entropy_loss.item()
             else:
                 entropy_loss = 0
-            #默认不处理
+
             if self.tv_weight > 0 and i == 0:
                 tv_loss = self.tv(proj_hr_feats.square().sum(1, keepdim=True))
                 full_tv_loss += tv_loss.item()
@@ -222,12 +206,9 @@ class SimFeatUp(pl.LightningModule):
 
             loss = rec_loss + self.crf_weight * crf_loss + self.tv_weight * tv_loss - self.filter_ent_weight * entropy_loss \
                  + rec_img_loss * self.rec_img_weight
-            #total_loss += loss
             full_total_loss += loss.item()
             self.manual_backward(loss)
-        #full_total_loss = total_loss.item()
-        #self.manual_backward(total_loss)
-        #print(full_total_loss)
+
         self.avg.add("loss/crf", full_crf_loss)
         self.avg.add("loss/ent", full_entropy_loss)
         self.avg.add("loss/tv", full_tv_loss)
@@ -235,18 +216,8 @@ class SimFeatUp(pl.LightningModule):
         self.avg.add('loss/rec_img', full_rec_img_loss)
         self.avg.add("loss/total", full_total_loss)
 
-        #每1000轮保存一次权重
         if self.global_step % 100 == 0:
-            save_path = self.chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
-            fusion_save_path = self.fusion_chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
-            self.trainer.save_checkpoint(save_path)
-            #self.trainer.save_checkpoint(self.chkpt_dir[:-5] + '/' + self.chkpt_dir[:-5] + f'_{self.global_step}.ckpt')
-            fusion_state = {}
-            model_state = self.model.state_dict()
-            for key, value in model_state.items():
-                if 'fusion' in key:
-                    fusion_state[key] = value  
-            torch.save({'state_dict': fusion_state}, fusion_save_path)
+            self.trainer.save_checkpoint(self.chkpt_dir[:-5] + '/' + self.chkpt_dir[:-5] + f'_{self.global_step}.ckpt')
 
         self.avg.logall(self.log)
         if self.global_step < 10:
@@ -262,15 +233,6 @@ class SimFeatUp(pl.LightningModule):
     #             print(name)
 
     def on_save_checkpoint(self, checkpoint):
-        # 保存 fusion 参数
-        fusion_state = {}
-        model_state = self.model.state_dict()
-        for key, value in model_state.items():
-            if 'fusion' in key:  
-                fusion_state[key] = value
-        fusion_save_path = self.fusion_chkpt_dir.replace('.ckpt', f'_{self.global_step}.ckpt')
-        torch.save({'state_dict': fusion_state}, fusion_save_path)
-
         new_state_dict = {}
         for key, value in checkpoint['state_dict'].items():
             if 'upsampler' in key:
@@ -313,7 +275,7 @@ class SimFeatUp(pl.LightningModule):
 
                 hr_jit_feats = apply_jitter(hr_feats, self.max_pad, transform_params)
                 down_jit_feats = self.downsampler(hr_jit_feats, jit_img)
-                
+
                 [red_lr_feats], fit_pca = pca([lr_feats[0].unsqueeze(0)])
                 [red_hr_feats], _ = pca([hr_feats[0].unsqueeze(0)], fit_pca=fit_pca)
                 [red_lr_jit_feats], _ = pca([lr_jit_feats[0].unsqueeze(0)], fit_pca=fit_pca)
@@ -357,9 +319,7 @@ class SimFeatUp(pl.LightningModule):
                 writer.flush()
 
     def configure_optimizers(self):
-        
         all_params = []
-        all_params.extend(list(self.model.model.visual.fusion.parameters()))
         all_params.extend(list(self.downsampler.parameters()))
         all_params.extend(list(self.upsampler.parameters()))
 
@@ -395,10 +355,8 @@ def my_app(cfg: DictConfig) -> None:
             f"_ent_{cfg.filter_ent_weight}")
 
     log_dir = join(cfg.output_root, f"logs/jbu_one/{name}")
-    chkpt_dir = join(cfg.output_root, f"checkpoints/jbu_one/upsampler/{name}.ckpt")
-    fusion_chkpt_dir = join(cfg.output_root, f"checkpoints/jbu_one/fusion/{name}.ckpt")
+    chkpt_dir = join(cfg.output_root, f"checkpoints/jbu_one/{name}.ckpt")
     os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(fusion_chkpt_dir, exist_ok=True)
 
     model = SimFeatUp(
         model_type=cfg.model_type,
@@ -417,8 +375,7 @@ def my_app(cfg: DictConfig) -> None:
         rec_img_weight=cfg.rec_img_weight,
         upsampler=cfg.upsampler_type,
         downsampler=cfg.downsampler_type,
-        chkpt_dir=chkpt_dir,
-        fusion_chkpt_dir=fusion_chkpt_dir
+        chkpt_dir=chkpt_dir
     )
 
     transform = T.Compose([
@@ -454,7 +411,6 @@ def my_app(cfg: DictConfig) -> None:
         log_every_n_steps=10,
         callbacks=callbacks,
         reload_dataloaders_every_n_epochs=1,
-        precision=32,
     )
 
     gc.collect()

@@ -1,10 +1,10 @@
 from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
-from segearth_segmentor import SegEarthSegmentation
+from segmentor import SegEarthSegmentation
 import numpy as np
 
-img = Image.open('/root/autodl-tmp/zdj-SegEarth-OV/demo/DJI_0406.JPG')
+img = Image.open('./demo/DJI_0406.JPG')
 name_list = ['vegetation','building','road','vehicle','background']
 
 with open('./configs/my_name.txt', 'w') as writers:
@@ -28,14 +28,16 @@ model = SegEarthSegmentation(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
     model_type='FCLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth','FCLIP'
-    ignore_residual=True,
-    intermediate_fusion=True,
-    attention_bias=False,#FCLIP uses attention_bias by default,this parameter is provided for use by other models.
-    feature_up=True,
+    ignore_residual=True,  # introduced from ClearCLIP; optional in SegEarth/FCLIP
+    intermediate_fusion=True,  # controls fusion of the I (Low-Level) branch
+    global_fusion=True, # controls fusion of the G (Global) branch
+    attention_bias=False,  # for other methods to toggle L (Local) branch fusion;
+                           # fused by default in FCLIP
+    feature_up=True,  # introduced in SegEarth; optional in FCLIP
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-    cls_token_lambda= -0.3,
+    cls_token_lambda= -0.3, # introduced in SegEarth; optional in FCLIP
     prob_thd=0.4,
     name_path='./configs/my_name.txt',
     bg_idx=4,
@@ -54,4 +56,4 @@ ax[1].imshow(seg_pred, cmap='viridis')
 ax[1].axis('off')
 plt.tight_layout()
 plt.show()
-plt.savefig('seg_pred_limit_orgin4', bbox_inches='tight')
+plt.savefig('seg_pred.png', bbox_inches='tight')

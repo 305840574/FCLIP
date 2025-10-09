@@ -40,6 +40,7 @@ class SegEarthSegmentation(BaseSegmentor):
                  device=torch.device('cuda'),
                  ignore_residual=True,
                  intermediate_fusion=True,
+                 global_fusion=True,
                  attention_bias=False,
                  prob_thd=0.0,
                  logit_scale=50,
@@ -136,6 +137,7 @@ class SegEarthSegmentation(BaseSegmentor):
         self.model_type = model_type
         self.feature_up = feature_up
         self.intermediate_fusion=intermediate_fusion
+        self.global_fusion=global_fusion
         self.attention_bias=attention_bias
         self.cls_token_lambda = cls_token_lambda
         self.lambda_global=lambda_global
@@ -143,11 +145,12 @@ class SegEarthSegmentation(BaseSegmentor):
         self.fusion_weight=fusion_weight
         self.gaussian_std=gaussian_std
         self.output_cls_token = cls_token_lambda != 0 or lambda_global != 0
-        
-        self.global_fusion=lambda_global != 0
         self.bg_idx = bg_idx
         self.slide_stride = slide_stride
         self.slide_crop = slide_crop
+
+        if self.global_fusion!=True:
+            self.lambda_global=0.0
 
         if self.clip_type == 'BLIP':
             self.patch_size = self.net.visual_encoder.patch_size
@@ -271,11 +274,7 @@ class SegEarthSegmentation(BaseSegmentor):
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
         
         return logits
-    '''
-    滑动窗口推理(Sliding-Window Inference):
-    用于处理大尺寸图像（例如高分辨率的遥感图像），避免直接处理整张图像带来的内存或计算限制。
-    将图像分割成多个小块(crop)，逐个小块进行推理(调用 forward_feature 方法)，然后将结果拼接回原始图像尺寸。
-    '''
+    
     def forward_slide(self, img, img_metas, stride=112, crop_size=224):
         """Inference by sliding-window with overlap.
         If h_crop > h_img or w_crop > w_img, the small patch will be used to

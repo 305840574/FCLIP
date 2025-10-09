@@ -13,7 +13,6 @@ import numpy as np
 from PIL import Image
 import mmcv
 
-# iSAID调色板
 iSAID_palette = {
     0: (0, 0, 0), 1: (0, 0, 63), 2: (0, 63, 63), 3: (0, 63, 0),
     4: (0, 63, 127), 5: (0, 63, 191), 6: (0, 63, 255), 7: (0, 127, 63),
@@ -21,21 +20,18 @@ iSAID_palette = {
     12: (0, 191, 127), 13: (0, 127, 191), 14: (0, 127, 255), 15: (0, 100, 155)
 }
 
-# 将调色板转换为NumPy数组以便高效比较
 PALETTE_COLORS = np.array(list(iSAID_palette.values()))
 PALETTE_INDICES = np.array(list(iSAID_palette.keys()))
 
 def verify_label_image(image_path):
-    """
-    验证单张iSAID标签图像的颜色值。
-    """
+
     if not osp.exists(image_path):
         print(f"Error: Image file not found at {image_path}")
         return
 
     print(f"\n--- Verifying: {osp.basename(image_path)} ---")
 
-    # 方法1: 使用 PIL (Image.open)
+
     try:
         pil_img = Image.open(image_path).convert('RGB')
         pil_arr = np.array(pil_img)
@@ -46,7 +42,6 @@ def verify_label_image(image_path):
 
     print("-" * 20)
 
-    # 方法2: 使用 mmcv.imread
     try:
         mmcv_arr = mmcv.imread(image_path, channel_order='rgb')
         print("  - Loaded with mmcv.imread")
@@ -55,13 +50,9 @@ def verify_label_image(image_path):
         print(f"  - Error loading with mmcv: {e}")
 
 def verify_colors(image_array):
-    """
-    核心函数：比较图像中的颜色与iSAID调色板。
-    """
     if image_array is None:
         return
 
-    # 获取图像中的所有唯一颜色
     unique_colors = np.unique(image_array.reshape(-1, 3), axis=0)
 
     print(f"    - Found {len(unique_colors)} unique colors.")
@@ -71,17 +62,14 @@ def verify_colors(image_array):
     num_unmatched_pixels = 0
     total_pixels = image_array.shape[0] * image_array.shape[1]
 
-    # 遍历图像中的所有像素，检查是否与调色板完全匹配
     arr_2d = np.zeros(image_array.shape[:2], dtype=np.uint8)
     matched_pixels_count = 0
     for color in unique_colors:
-        # 使用np.any和np.all来检查颜色是否在调色板中
+
         is_in_palette = np.any(np.all(PALETTE_COLORS == color, axis=1))
         
         if not is_in_palette:
             unmatched_colors.append(color)
-            
-            # 计算不匹配的像素数量
             m = np.all(image_array == color, axis=2)
             num_unmatched_pixels += np.sum(m)
         else:

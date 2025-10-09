@@ -4,17 +4,18 @@ model = dict(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
     model_type='FCLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth','FCLIP'
-    ignore_residual=True,
-    intermediate_fusion=True,
-    attention_bias=False,#FCLIP uses attention_bias by default,this parameter is provided for use by other models.
-    feature_up=True,
+    ignore_residual=True,  # introduced from ClearCLIP; optional in SegEarth/FCLIP
+    intermediate_fusion=True,  # controls fusion of the I (Low-Level) branch
+    global_fusion=True, # controls fusion of the G (Global) branch
+    attention_bias=False,  # for other methods to toggle L (Local) branch fusion;
+                           # fused by default in FCLIP
+    feature_up=True,  # introduced in SegEarth; optional in FCLIP
     feature_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
-    cls_token_lambda= -0.3,
+    cls_token_lambda= -0.3, # introduced in SegEarth; optional in FCLIP
 )
 
-# 评估器
 test_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
 
 default_scope = 'mmseg'

@@ -4,10 +4,10 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_iSAID.txt',
     prob_thd=0.4,
-    lambda_global=-1,
-    lambda_local=-0.005,
-    gaussian_std=8,
-    fusion_weight=-0.5,#-0.4:21.74
+    lambda_global=-0.3,
+    lambda_local=-0.004,
+    gaussian_std=10,
+    fusion_weight=-0.5,
 )   
 
 # dataset settings
@@ -16,7 +16,7 @@ data_root = ''
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(660,660), keep_ratio=True),
+    dict(type='Resize', scale=(500,500), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations'),

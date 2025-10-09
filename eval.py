@@ -1,7 +1,7 @@
 import os
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 import argparse
-import segearth_segmentor
+import segmentor
 import custom_datasets
 
 from mmengine.config import Config
@@ -64,7 +64,7 @@ def main():
     cfg.work_dir = args.work_dir
 
     # visualization
-    #trigger_visualization_hook(cfg, args)#控制可视化
+    #trigger_visualization_hook(cfg, args)
     runner = Runner.from_cfg(cfg)
     runner.test()
 
