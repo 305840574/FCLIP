@@ -30,8 +30,11 @@
 1. git clone this repository
 git clone https://github.com/305840574/FCLIP.git
 cd FCLIP
-conda env create -f FCLIP.yaml
+2. install dependencies
+conda env create -f FCLIP.yml
 conda activate FCLIP
+pip install git+https://github.com/likyoo/SimFeatUp.git
+
 ```
 
 
@@ -222,5 +225,6 @@ python eval_all.py
 </p>
 
 ## Acknowledgement
+
 
 
