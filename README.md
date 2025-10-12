@@ -34,7 +34,11 @@ cd FCLIP
 conda env create -f FCLIP.yml
 conda activate FCLIP
 pip install git+https://github.com/likyoo/SimFeatUp.git
-
+```
+Tip：If you encounter mmcv compilation errors (e.g., No module named 'mmcv._ext'), uninstall and reinstall using pre-built wheels:
+```
+pip uninstall mmcv -y
+pip install "mmcv==2.1.0" -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
 ```
 
 
@@ -227,9 +231,3 @@ python eval_all.py
 ## LICENSE
 
 This repo is under the Apache-2.0 license. For commercial use, please contact the authors. 
-
-
-
-
-
-
