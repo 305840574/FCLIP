@@ -1,7 +1,7 @@
 from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
-from segmentor import SegEarthSegmentation
+from segmentor import Segmentation
 from collections import OrderedDict
 import numpy as np
 def sizeof_fmt(num_bytes):
@@ -21,8 +21,7 @@ def summarize_model_params_total(model, dtype_size=4):
     return total_params, total_size
 
 
-model = SegEarthSegmentation(
-    #type='SegEarthSegmentation',
+model = Segmentation(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
     model_type='MaskCLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth','FCLIP'

@@ -3,9 +3,6 @@ import numpy as np
 from PIL import Image
 from collections import Counter
 
-mask = np.array(Image.open("/root/autodl-tmp/zdj-SegEarth-OV/data/UAVid/ann_dir/test/seq16_000000_0_1080_0_1280.png"))
-print(np.unique(mask))
-
 import argparse
 import glob
 import os.path as osp

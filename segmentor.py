@@ -31,7 +31,7 @@ from torch.utils.checkpoint import checkpoint
 #from pos_embed.py import get_2d_sincos_pos_embed
 
 @MODELS.register_module()
-class SegEarthSegmentation(BaseSegmentor):
+class Segmentation(BaseSegmentor):
     def __init__(self,
                  clip_type,
                  vit_type,

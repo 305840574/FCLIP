@@ -1,7 +1,7 @@
 from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
-from segmentor import SegEarthSegmentation
+from segmentor import Segmentation
 import numpy as np
 
 img = Image.open('./demo/DJI_0406.JPG')
@@ -24,7 +24,7 @@ img_tensor = transforms.Compose([
 
 img_tensor = img_tensor.unsqueeze(0).to('cuda')
 
-model = SegEarthSegmentation(
+model = Segmentation(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
     model_type='FCLIP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth','FCLIP'
