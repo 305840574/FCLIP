@@ -89,7 +89,7 @@ FCLIP
 ```
 ### OpenEarthMap
 
-The data could be downloaded from [here](https://open-earth-map.org).
+The data could be downloaded from [here](https://zenodo.org/records/7223446).
 
 For OpenEarthMap dataset, please run the following command to re-organize the dataset.
 
@@ -227,6 +227,7 @@ python eval_all.py
 ## LICENSE
 
 This repo is under the Apache-2.0 license. For commercial use, please contact the authors. 
+
 
 
 
