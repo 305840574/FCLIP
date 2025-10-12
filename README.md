@@ -30,6 +30,7 @@
 1. git clone this repository
 git clone https://github.com/305840574/FCLIP.git
 cd FCLIP
+conda env create -f FCLIP.yaml
 conda activate FCLIP
 ```
 
@@ -221,4 +222,5 @@ python eval_all.py
 </p>
 
 ## Acknowledgement
+
 
