@@ -74,14 +74,16 @@ FCLIP
 │   │   ├── ann_dir
 │   │   │   ├── train
 │   │   │   ├── val
-│   ├── iSAID
-│   │   ├── img_dir
-│   │   │   ├── train
-│   │   │   ├── val
-│   │   │   ├── test
-│   │   ├── ann_dir
-│   │   │   ├── train
-│   │   │   ├── val
+│   ├── VDD 
+│   │   ├── train
+│   │   │   ├── src
+│   │   │   ├── gt
+│   │   ├── val
+│   │   │   ├── src
+│   │   │   ├── gt
+│   │   ├── test
+│   │   │   ├── src
+│   │   │   ├── gt
 │   ├── UDD5 
 │   │   ├── train
 │   │   │   ├── src
@@ -156,48 +158,14 @@ python tools/dataset_converters/vaihingen.py /path/to/vaihingen
 
 In our default setting (`clip_size`=512, `stride_size`=256), it will generate 344 images for training and 398 images for validation.
 
-### iSAID
-
-The data images could be download from [DOTA-v1.0](https://captain-whu.github.io/DOTA/dataset.html) (train/val/test)
-
-The data annotations could be download from [iSAID](https://captain-whu.github.io/iSAID/dataset.html) (train/val)
-
-The dataset is a Large-scale Dataset for Instance Segmentation (also have semantic segmentation) in Aerial Images.
-
-You may need to follow the following structure for dataset preparation after downloading iSAID dataset.
-
-```none
-├── data
-│   ├── iSAID
-│   │   ├── train
-│   │   │   ├── images
-│   │   │   │   ├── part1.zip
-│   │   │   │   ├── part2.zip
-│   │   │   │   ├── part3.zip
-│   │   │   ├── Semantic_masks
-│   │   │   │   ├── images.zip
-│   │   ├── val
-│   │   │   ├── images
-│   │   │   │   ├── part1.zip
-│   │   │   ├── Semantic_masks
-│   │   │   │   ├── images.zip
-│   │   ├── test
-│   │   │   ├── images
-│   │   │   │   ├── part1.zip
-│   │   │   │   ├── part2.zip
-```
-
-```shell
-python tools/dataset_converters/isaid.py /path/to/iSAID
-```
-
-In our default setting (`patch_width`=896, `patch_height`=896, `overlap_area`=384), it will generate 33978 images for training and 11644 images for validation.
-
 ### UDD5
 
 The data could be downloaded from [here](https://github.com/MarcWong/UDD).
 
 
+### VDD
+
+The data could be downloaded from [here](https://huggingface.co/datasets/RussRobin/VDD/tree/main).
 
 ## Quick Inference
 ```
@@ -231,3 +199,4 @@ python eval_all.py
 ## LICENSE
 
 This repo is under the Apache-2.0 license. For commercial use, please contact the authors. 
+
