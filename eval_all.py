@@ -3,7 +3,7 @@ configs_list = [
     # rs semantic segmentation
     './configs/cfg_openearthmap.py',
     './configs/cfg_loveda.py',
-    './configs/cfg_iSAID.py',
+    './configs/cfg_vdd.py',
     './configs/cfg_potsdam.py',
     './configs/cfg_vaihingen.py',
     './configs/cfg_udd5.py',
