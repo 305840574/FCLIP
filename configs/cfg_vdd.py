@@ -5,9 +5,9 @@ model = dict(
     name_path='./configs/cls_vdd.txt',
     prob_thd=0.3,
     lambda_global=-1,
-    lambda_local=-0.15,#-0.13
+    lambda_local=-0.15,
     gaussian_std=0.9,
-    fusion_weight=-0.1,#-0.1
+    fusion_weight=-0.1,
 )
 
 # dataset settings
