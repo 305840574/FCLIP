@@ -21,7 +21,7 @@
 </p>
 
 ## Abstract
-> Open-vocabulary zero-shot semantic segmentation in remote sensing images is critical for natural resource management and ecological monitoring. Existing CLIP-based methods often suffer from reduced accuracy for two reasons: first, a trade-off between global and local features; second, noise from low-level features. We propose Conditional Neighborhood Attention (CNA) to address these issues. It applies Q-Q, K-K, and V-V self-relations in the last attention layer of the CLIP image encoder, using a local Gaussian bias to focus on nearby regions without disrupting the original distribution. Furthermore, we propose a Multi-level Static Adaptive Fusion framework (MSAF) which integrates global, local, and low-level features in a complementary manner. Without training, the framework leverages simple and efficient static weights to preserve global semantic consistency and enhance local discriminability. It also suppresses noise from low-level features. Comprehensive evaluations demonstrate that our method achieves an average of 1.1\% improvement in mIoU over existing state-of-the-art approaches across six benchmark datasets for remote sensing semantic segmentation, and exhibits strong cross-domain generalization capability.
+> Open-vocabulary zero-shot semantic segmentation in remote sensing images is critical for natural resource management and ecological monitoring. Existing CLIP-based methods often suffer from reduced accuracy for two reasons: first, a trade-off between global and local features; second, noise from low-level features. We propose Conditional Neighborhood Attention (CNA) to address these issues. It applies Q-Q, K-K, and V-V self-relations in the last attention layer of the CLIP image encoder, using a local Gaussian bias to focus on nearby regions without disrupting the original distribution. Furthermore, we propose a Multi-level Static Adaptive Fusion framework (MSAF) which integrates global, local, and low-level features in a complementary manner. Without training, the framework leverages simple and efficient static weights to preserve global semantic consistency and enhance local discriminability. It also suppresses noise from low-level features. Comprehensive evaluations demonstrate that our method achieves an average of 1.0% improvement in mIoU over existing state-of-the-art approaches across six benchmark datasets for remote sensing semantic segmentation, and exhibits strong cross-domain generalization capability.
 
 ## Dependencies and Installation
 
@@ -199,4 +199,5 @@ python eval_all.py
 ## LICENSE
 
 This repo is under the Apache-2.0 license. For commercial use, please contact the authors. 
+
 
